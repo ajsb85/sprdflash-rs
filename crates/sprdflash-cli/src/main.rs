@@ -47,6 +47,13 @@ enum Command {
     },
     /// List serial ports, flagging download-mode and module ports.
     ListPorts,
+    /// Reboot a device stuck in FDL2/download mode (BSL `NORMAL_RESET`). Useful
+    /// after a flash aborts mid-way (e.g. a genuine read-back verify failure).
+    Reset {
+        /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
+        #[arg(long)]
+        port: Option<String>,
+    },
     /// Flash a .pac to the module natively (PDL + BSL, no vendor tool).
     Flash {
         /// Path to the .pac file.
@@ -132,6 +139,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Info { pac, no_verify } => cmd_info(&pac, !no_verify),
         Command::ListPorts => cmd_list_ports(),
+        Command::Reset { port } => cmd_reset(port),
         Command::Flash {
             pac,
             port,
@@ -425,6 +433,25 @@ fn resolve_download_port(explicit: Option<String>, enter_download: bool) -> Resu
             .context("download port did not appear after AT*DOWNLOAD");
     }
     bail!("no download port (0525:a4a7) found; pass --port or --enter-download")
+}
+
+/// Reboot a device out of FDL2/download mode with a BSL `NORMAL_RESET`.
+fn cmd_reset(port: Option<String>) -> Result<()> {
+    use sprdflash_core::bsl::{self, Checksum};
+    use sprdflash_transport::Transport;
+
+    let name = match port {
+        Some(p) => p,
+        None => discovery::find_download_port()
+            .map(|p| p.name)
+            .context("no download port (0525:a4a7) found; pass --port")?,
+    };
+    let mut serial = Serial::open(&name, 115_200).context("opening download port")?;
+    let msg = bsl::build_message(bsl::cmd::NORMAL_RESET, &[], Checksum::Sprd);
+    serial.write_all(&msg).context("sending NORMAL_RESET")?;
+    serial.reset_teardown(std::time::Duration::from_millis(1000));
+    println!("Sent NORMAL_RESET to {name}; the module should reboot into its firmware.");
+    Ok(())
 }
 
 fn cmd_info(path: &PathBuf, verify: bool) -> Result<()> {
