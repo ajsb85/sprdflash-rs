@@ -159,9 +159,13 @@ impl<'a> BslIo<'a> {
             let off = out.len();
             let n = (total - off).min(chunk.max(1));
             let mut p = Vec::with_capacity(12);
-            p.extend_from_slice(&addr.to_be_bytes());
+            // Advance the address per chunk. The RDA8910/UIS8910 FDL2 reads from
+            // `addr` and does not honour a separate offset field, so we fold the
+            // running offset into `addr` and send a zero offset — correct whether
+            // the device reads `addr` or `addr + offset`.
+            p.extend_from_slice(&addr.wrapping_add(off as u32).to_be_bytes());
             p.extend_from_slice(&(n as u32).to_be_bytes());
-            p.extend_from_slice(&(off as u32).to_be_bytes());
+            p.extend_from_slice(&0u32.to_be_bytes());
             let data = self.command(
                 bsl::cmd::READ_FLASH,
                 &p,

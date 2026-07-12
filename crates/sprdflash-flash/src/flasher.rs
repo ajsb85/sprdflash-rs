@@ -184,6 +184,7 @@ impl Flasher {
                 tracing::info!("verify {} ({} bytes)", e.file_id, data.len());
                 let back = bsl.read_flash(e.address, data.len(), READBACK_CHUNK)?;
                 if back != data {
+                    tracing::error!("verify {}: {}", e.file_id, describe_mismatch(data, &back));
                     return Err(FlashError::VerifyMismatch(e.file_id.clone()));
                 }
                 progress(fid, data.len() as u64, data.len() as u64);
@@ -343,5 +344,49 @@ impl Flasher {
             "NV END",
         )?;
         Ok(total)
+    }
+}
+
+/// Summarize how a read-back differs from the written image, for diagnostics.
+fn describe_mismatch(expected: &[u8], actual: &[u8]) -> String {
+    if expected.len() != actual.len() {
+        return format!(
+            "read-back length {} != written {} bytes",
+            actual.len(),
+            expected.len()
+        );
+    }
+    let differ = expected.iter().zip(actual).filter(|(a, b)| a != b).count();
+    let first = expected
+        .iter()
+        .zip(actual)
+        .position(|(a, b)| a != b)
+        .unwrap_or(0);
+    let end = (first + 16).min(expected.len());
+    format!(
+        "{differ}/{} bytes differ; first at offset {first}; expected {:02x?} got {:02x?}",
+        expected.len(),
+        &expected[first..end],
+        &actual[first..end],
+    )
+}
+
+#[cfg(test)]
+mod mismatch_tests {
+    use super::describe_mismatch;
+
+    #[test]
+    fn reports_first_diff_and_count() {
+        let exp = [1u8, 2, 3, 4, 5];
+        let act = [1u8, 2, 9, 4, 8];
+        let s = describe_mismatch(&exp, &act);
+        assert!(s.contains("2/5 bytes differ"), "{s}");
+        assert!(s.contains("offset 2"), "{s}");
+    }
+
+    #[test]
+    fn reports_length_difference() {
+        let s = describe_mismatch(&[1, 2, 3], &[1, 2]);
+        assert!(s.contains("length 2 != written 3"), "{s}");
     }
 }

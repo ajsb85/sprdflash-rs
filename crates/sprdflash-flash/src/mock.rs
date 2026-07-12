@@ -169,8 +169,20 @@ impl MockTransport {
                         let sz = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
                         let off =
                             u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
-                        let stored = self.flash.get(&addr).map(Vec::as_slice).unwrap_or(&[]);
-                        let mut slice = stored.get(off..off + sz).unwrap_or(&[]).to_vec();
+                        // Flat-addressable flash: find the written region that
+                        // contains `addr` and slice from (addr - base + off).
+                        let mut slice = self
+                            .flash
+                            .iter()
+                            .find(|(base, buf)| {
+                                addr >= **base && (addr - **base) as usize <= buf.len()
+                            })
+                            .and_then(|(base, buf)| {
+                                let start = (addr - base) as usize + off;
+                                buf.get(start..(start + sz).min(buf.len()))
+                                    .map(<[u8]>::to_vec)
+                            })
+                            .unwrap_or_default();
                         if self.corrupt_readback && !slice.is_empty() {
                             slice[0] ^= 0xFF;
                         }
