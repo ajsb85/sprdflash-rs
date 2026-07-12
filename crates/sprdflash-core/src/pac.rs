@@ -165,12 +165,19 @@ pub fn parse(pac: &[u8], verify_payload: bool) -> Result<PacInfo> {
     let file_count = u32_at(header, OFF_FILE_COUNT);
     let file_offset = u32_at(header, OFF_FILE_OFFSET) as usize;
 
-    let mut entries = Vec::with_capacity(file_count as usize);
+    // Pre-allocate at most what could physically fit — an untrusted `file_count`
+    // must never drive a giant allocation.
+    let max_entries = pac.len() / FILE_HEADER_SIZE + 1;
+    let mut entries = Vec::with_capacity((file_count as usize).min(max_entries));
     for idx in 0..file_count {
-        let base = file_offset + (idx as usize) * FILE_HEADER_SIZE;
-        let fh = pac
-            .get(base..base + FILE_HEADER_SIZE)
+        let base = (idx as usize)
+            .checked_mul(FILE_HEADER_SIZE)
+            .and_then(|off| off.checked_add(file_offset))
             .ok_or(Error::PacTruncatedTable(idx))?;
+        let end = base
+            .checked_add(FILE_HEADER_SIZE)
+            .ok_or(Error::PacTruncatedTable(idx))?;
+        let fh = pac.get(base..end).ok_or(Error::PacTruncatedTable(idx))?;
         let entry = PacEntry {
             file_id: utf16z(&fh[FOFF_FILE_ID..FOFF_FILE_ID + 512]),
             file_name: utf16z(&fh[FOFF_FILE_NAME..FOFF_FILE_NAME + 512]),
@@ -232,5 +239,33 @@ mod tests {
     fn utf16z_stops_at_nul() {
         let raw = b"A\x00B\x00\x00\x00C\x00";
         assert_eq!(utf16z(raw), "AB");
+    }
+}
+
+#[cfg(test)]
+mod prop {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Untrusted firmware must never panic the parser (bad length, huge
+        /// file_count/file_offset, out-of-range entries) -- only Ok/Err.
+        #[test]
+        fn parse_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..4096),
+                              verify in any::<bool>()) {
+            let _ = parse(&bytes, verify);
+        }
+
+        /// Same, with a plausible header (size field made valid) so the file
+        /// table + entry-range paths are exercised with arbitrary counts/offsets.
+        #[test]
+        fn parse_never_panics_plausible_header(
+            mut bytes in proptest::collection::vec(any::<u8>(), HEADER_SIZE..16384),
+            verify in any::<bool>(),
+        ) {
+            let len = bytes.len() as u32;
+            bytes[OFF_PAC_SIZE..OFF_PAC_SIZE + 4].copy_from_slice(&len.to_le_bytes());
+            let _ = parse(&bytes, verify);
+        }
     }
 }
