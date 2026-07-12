@@ -9,6 +9,7 @@
 
 mod bsl_io;
 mod flasher;
+pub mod mock;
 mod options;
 mod pdl_io;
 
