@@ -3,7 +3,7 @@
 
 //! The [`Flasher`]: PDL → BSL → partitions → format → reset.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sprdflash_core::pac::PacInfo;
 use sprdflash_core::{bsl, plan};
@@ -50,6 +50,9 @@ pub enum FlashError {
     /// A written partition read back different bytes (`--verify-readback`).
     #[error("read-back verify failed for {0}")]
     VerifyMismatch(String),
+    /// The device rejected even the base flash address, so its size is unknown.
+    #[error("could not read the flash base to size it")]
+    FlashSize,
 }
 
 /// Result of a successful flash.
@@ -207,6 +210,77 @@ impl Flasher {
             bsl.port().reset_teardown(self.opts.reset_hold);
         }
         Ok(out)
+    }
+
+    /// Dump the whole flash from `base` into one image, **discovering the flash
+    /// size** by probing `READ_FLASH` (this minimal FDL2 has no geometry command:
+    /// an in-range read replies `READ_FLASH`, an out-of-range one replies
+    /// `INVALID_CMD`). Returns `(image, size)`. A full standalone backup — no
+    /// partition layout needed.
+    pub fn dump_full(
+        &self,
+        port: &mut dyn Transport,
+        info: &PacInfo,
+        pac: &[u8],
+        base: u32,
+        progress: Progress,
+    ) -> Result<(Vec<u8>, u32), FlashError> {
+        let plan = plan::build(info).map_err(FlashError::Plan)?;
+        let (mut bsl, version, _f1, _f2) = self.bring_up(port, pac, &plan, progress)?;
+        tracing::info!("discovering flash size via {version}");
+        let size = discover_flash_size(&mut bsl, base, self.opts.timeout)?;
+        tracing::info!("flash size: {size:#x} ({} MiB)", size >> 20);
+        progress("size", u64::from(size), u64::from(size));
+
+        let mut out = Vec::with_capacity(size as usize);
+        while (out.len() as u32) < size {
+            let off = out.len() as u32;
+            let n = (size - off).min(READBACK_CHUNK as u32);
+            let chunk = bsl.read_flash(base.wrapping_add(off), n as usize, READBACK_CHUNK)?;
+            if chunk.is_empty() {
+                break;
+            }
+            out.extend_from_slice(&chunk);
+            progress("read", out.len() as u64, u64::from(size));
+        }
+        if self.opts.reset {
+            bsl.send(bsl::cmd::NORMAL_RESET, &[])?;
+            bsl.port().reset_teardown(self.opts.reset_hold);
+        }
+        Ok((out, size))
+    }
+
+    /// Bring up FDL2, send each `(cmd, payload)` in one session, and return the
+    /// `(reply_type, data)` for each — for probing device capabilities (e.g.
+    /// `READ_PARTITION`, flash geometry). Stops early if a command errors or
+    /// times out (which desyncs the link). Resets afterwards.
+    pub fn probe_commands(
+        &self,
+        port: &mut dyn Transport,
+        info: &PacInfo,
+        pac: &[u8],
+        cmds: &[(u16, Vec<u8>)],
+        progress: Progress,
+    ) -> Result<Vec<(u16, Vec<u8>)>, FlashError> {
+        let plan = plan::build(info).map_err(FlashError::Plan)?;
+        let (mut bsl, _v, _f1, _f2) = self.bring_up(port, pac, &plan, progress)?;
+        let mut replies = Vec::with_capacity(cmds.len());
+        for (cmd, payload) in cmds {
+            bsl.send(*cmd, payload)?;
+            match bsl.recv(self.opts.timeout) {
+                Ok(reply) => replies.push(reply),
+                Err(e) if e.is_timeout() => {
+                    replies.push((0, Vec::new())); // 0 = no reply / timeout
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        if self.opts.reset {
+            bsl.send(bsl::cmd::NORMAL_RESET, &[])?;
+            bsl.port().reset_teardown(self.opts.reset_hold);
+        }
+        Ok(replies)
     }
 
     /// Bring the device up to a connected FDL2 (PDL → FDL1 → BSL → FDL2 →
@@ -392,6 +466,56 @@ impl Flasher {
         )?;
         Ok(total)
     }
+}
+
+/// Discover the flash size by probing `READ_FLASH`: exponentially find an
+/// out-of-range offset, then binary-search the boundary down to 64 KiB. An
+/// in-range read replies `READ_FLASH`; an out-of-range one replies a non-data
+/// type (`INVALID_CMD` on RDA8910). Offsets are relative to `base`.
+fn discover_flash_size(bsl: &mut BslIo, base: u32, timeout: Duration) -> Result<u32, FlashError> {
+    const GRAN: u32 = 0x1_0000; // 64 KiB
+    const CAP: u32 = 128 << 20; // never probe past 128 MiB
+
+    fn probe(bsl: &mut BslIo, addr: u32, timeout: Duration) -> Result<bool, FlashError> {
+        let mut p = Vec::with_capacity(12);
+        p.extend_from_slice(&addr.to_be_bytes());
+        p.extend_from_slice(&16u32.to_be_bytes());
+        p.extend_from_slice(&0u32.to_be_bytes());
+        bsl.send(bsl::cmd::READ_FLASH, &p)?;
+        let (ty, _) = bsl.recv(timeout)?;
+        Ok(ty == bsl::rep::READ_FLASH)
+    }
+
+    if !probe(bsl, base, timeout)? {
+        return Err(FlashError::FlashSize);
+    }
+    // Exponential search for the first out-of-range offset.
+    let mut lo = 0u32; // base + lo is readable
+    let mut s = 1u32 << 20; // 1 MiB
+    let mut hi = loop {
+        if s >= CAP {
+            break CAP;
+        }
+        if probe(bsl, base.wrapping_add(s), timeout)? {
+            lo = s;
+            s <<= 1;
+        } else {
+            break s;
+        }
+    };
+    // Binary search the boundary down to GRAN.
+    while hi - lo > GRAN {
+        let mid = lo + (((hi - lo) / 2) & !(GRAN - 1));
+        if mid == lo {
+            break;
+        }
+        if probe(bsl, base.wrapping_add(mid), timeout)? {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Ok(hi)
 }
 
 /// Summarize how a read-back differs from the written image, for diagnostics.

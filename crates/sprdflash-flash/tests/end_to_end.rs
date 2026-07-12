@@ -197,6 +197,22 @@ fn dump_reads_partitions_off_the_device() {
 }
 
 #[test]
+fn dump_full_discovers_size_and_reads_the_whole_flash() {
+    let pac = build_pac();
+    let info = pac::parse(&pac, true).expect("valid PAC");
+    // A 128 KiB "flash" at the NOR base; out-of-range reads reply INVALID_CMD,
+    // so size discovery must land on exactly 0x20000.
+    let image: Vec<u8> = (0..0x20000u32).map(|i| (i & 0xff) as u8).collect();
+    let mut mock = MockTransport::seeded(&[(0x6000_0000, image.clone())]);
+    let mut noop = |_: &str, _: u64, _: u64| {};
+    let (got, size) = Flasher::new(FlashOptions::default())
+        .dump_full(&mut mock, &info, &pac, 0x6000_0000, &mut noop)
+        .expect("dump_full succeeds");
+    assert_eq!(size, 0x20000, "auto-discovered flash size");
+    assert_eq!(got, image, "read the whole flash");
+}
+
+#[test]
 fn read_back_verify_catches_corruption() {
     use sprdflash_flash::FlashError;
     let pac = build_pac();

@@ -33,8 +33,13 @@ pub mod cmd {
     pub const READ_CHIP_TYPE: u16 = 0x07;
     pub const CHANGE_BAUD: u16 = 0x09;
     pub const ERASE_FLASH: u16 = 0x0A;
-    pub const DISABLE_TRANSCODE: u16 = 0x21;
+    pub const READ_START: u16 = 0x10;
+    pub const READ_MIDST: u16 = 0x11;
+    pub const READ_END: u16 = 0x12;
     pub const READ_CHIP_UID: u16 = 0x1A;
+    pub const DISABLE_TRANSCODE: u16 = 0x21;
+    /// Read the on-device partition table (newer FDLs; reply `rep::READ_PARTITION`).
+    pub const READ_PARTITION: u16 = 0x2D;
     pub const END_PROCESS: u16 = 0x7F;
 }
 
@@ -49,6 +54,8 @@ pub mod rep {
     pub const READ_FLASH: u16 = 0x93;
     pub const READ_CHIP_TYPE: u16 = 0x94;
     pub const READ_CHIP_UID: u16 = 0xAB;
+    /// Partition-table reply carrying `n × 0x4c`-byte `{name[72], size_u32}` entries.
+    pub const READ_PARTITION: u16 = 0xBA;
     pub const UNSUPPORTED_COMMAND: u16 = 0xFE;
 }
 
@@ -64,6 +71,7 @@ pub fn rep_name(code: u16) -> &'static str {
         rep::READ_FLASH => "READ_FLASH",
         rep::READ_CHIP_TYPE => "READ_CHIP_TYPE",
         rep::READ_CHIP_UID => "READ_CHIP_UID",
+        rep::READ_PARTITION => "READ_PARTITION",
         rep::UNSUPPORTED_COMMAND => "UNSUPPORTED_COMMAND",
         _ => "?",
     }

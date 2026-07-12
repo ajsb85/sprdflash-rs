@@ -71,6 +71,10 @@ enum Command {
         /// is then used only for the FDL stages.
         #[arg(long = "region")]
         regions: Vec<String>,
+        /// Dump the WHOLE flash to <out>/flash.bin, auto-discovering its size (no
+        /// partition layout needed). The PAC supplies only the FDL stages.
+        #[arg(long)]
+        full: bool,
         /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
         #[arg(long)]
         port: Option<String>,
@@ -89,6 +93,19 @@ enum Command {
         /// Output path for the golden .pac.
         #[arg(long)]
         out: PathBuf,
+        /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
+        #[arg(long)]
+        port: Option<String>,
+        /// Send AT*DOWNLOAD=1 on the module's AT port first (auto mode-switch).
+        #[arg(long)]
+        enter_download: bool,
+    },
+    /// Probe the device for an on-flash partition table (BSL READ_PARTITION).
+    /// Experimental: works only if this chip's FDL2 implements it.
+    Parts {
+        /// PAC providing the FDL stages for this device.
+        #[arg(long)]
+        pac: PathBuf,
         /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
         #[arg(long)]
         port: Option<String>,
@@ -186,15 +203,21 @@ fn main() -> Result<()> {
             pac,
             out,
             regions,
+            full,
             port,
             enter_download,
-        } => cmd_dump(&pac, &out, &regions, port, enter_download),
+        } => cmd_dump(&pac, &out, &regions, full, port, enter_download),
         Command::Clone {
             pac,
             out,
             port,
             enter_download,
         } => cmd_clone(&pac, &out, port, enter_download),
+        Command::Parts {
+            pac,
+            port,
+            enter_download,
+        } => cmd_parts(&pac, port, enter_download),
         Command::Flash {
             pac,
             port,
@@ -632,6 +655,74 @@ fn cmd_clone(
     Ok(())
 }
 
+/// Probe the device for an on-flash partition table via BSL `READ_PARTITION`.
+fn cmd_parts(pac_path: &PathBuf, port: Option<String>, enter_download: bool) -> Result<()> {
+    use sprdflash_core::bsl;
+
+    let file = File::open(pac_path).with_context(|| format!("opening {}", pac_path.display()))?;
+    let mmap =
+        unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", pac_path.display()))?;
+    let info = pac::parse(&mmap, false).context("parsing PAC")?;
+
+    let dl = resolve_download_port(port, enter_download)?;
+    println!("Download port: {dl}");
+    let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
+
+    // Info commands (no payload), then READ_FLASH at rising addresses to bound
+    // the flash extent — the first address that errors marks the end. Info first
+    // so a READ_FLASH hang past the end can't mask them.
+    const NOR_BASE: u32 = 0x6000_0000;
+    let mut names: Vec<String> = Vec::new();
+    let mut cmds: Vec<(u16, Vec<u8>)> = Vec::new();
+    for (c, n) in [
+        (bsl::cmd::READ_CHIP_TYPE, "READ_CHIP_TYPE"),
+        (bsl::cmd::READ_CHIP_UID, "READ_CHIP_UID"),
+        (0x0C, "READ_FLASH_TYPE"),
+        (0x0D, "READ_FLASH_INFO"),
+        (0x29, "READ_NAND_BLOCK_INFO"),
+        (bsl::cmd::READ_PARTITION, "READ_PARTITION"),
+    ] {
+        names.push(n.to_string());
+        cmds.push((c, Vec::new()));
+    }
+    for mb in [4u32, 8, 12, 16, 24, 32, 48, 64] {
+        let addr = NOR_BASE + mb * 1024 * 1024;
+        names.push(format!("READ_FLASH @{addr:#010x} ({mb}MB)"));
+        cmds.push((bsl::cmd::READ_FLASH, read_flash_req(addr, 16)));
+    }
+
+    let mut noop = |_: &str, _: u64, _: u64| {};
+    let replies = Flasher::new(FlashOptions::default())
+        .probe_commands(&mut serial, &info, &mmap, &cmds, &mut noop)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    println!("\n{:<30} {:<20} data", "command", "reply");
+    for (name, (ty, data)) in names.iter().zip(&replies) {
+        let head: String = data
+            .iter()
+            .take(16)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let reply = if *ty == 0 {
+            "(no reply/timeout)".to_string()
+        } else {
+            format!("{} 0x{ty:02x}", bsl::rep_name(*ty))
+        };
+        println!("{name:<30} {reply:<20} [{}] {head}", data.len());
+    }
+    Ok(())
+}
+
+/// Build a `READ_FLASH` request payload: `addr | size | offset(=0)`, big-endian.
+fn read_flash_req(addr: u32, size: u32) -> Vec<u8> {
+    let mut p = Vec::with_capacity(12);
+    p.extend_from_slice(&addr.to_be_bytes());
+    p.extend_from_slice(&size.to_be_bytes());
+    p.extend_from_slice(&0u32.to_be_bytes());
+    p
+}
+
 /// Parse an `ADDR:SIZE` region spec (each hex `0x..` or decimal) into `(u32, u32)`.
 fn parse_region(s: &str) -> Result<(u32, u32)> {
     let (a, b) = s
@@ -653,6 +744,7 @@ fn cmd_dump(
     pac_path: &PathBuf,
     out_dir: &PathBuf,
     region_specs: &[String],
+    full: bool,
     port: Option<String>,
     enter_download: bool,
 ) -> Result<()> {
@@ -660,6 +752,45 @@ fn cmd_dump(
     let mmap =
         unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", pac_path.display()))?;
     let info = pac::parse(&mmap, false).context("parsing PAC")?;
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+
+    let dl = resolve_download_port(port, enter_download)?;
+    println!("Download port: {dl}");
+    let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
+
+    let mut state: (String, i64) = (String::new(), -1);
+    let mut progress = |stage: &str, done: u64, total: u64| {
+        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
+        if stage != state.0 {
+            if !state.0.is_empty() {
+                println!();
+            }
+            state = (stage.to_string(), -1);
+        }
+        if pct != state.1 {
+            state.1 = pct;
+            print!("\r  {stage:<16} {pct:3}%");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    };
+
+    // Whole-flash backup: auto-discover the size, no partition layout needed.
+    if full {
+        const NOR_BASE: u32 = 0x6000_0000;
+        let (image, size) = Flasher::new(FlashOptions::default())
+            .dump_full(&mut serial, &info, &mmap, NOR_BASE, &mut progress)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!();
+        let path = out_dir.join("flash.bin");
+        std::fs::write(&path, &image).with_context(|| format!("writing {}", path.display()))?;
+        println!(
+            "Dumped whole flash: {size:#x} bytes ({} MiB) -> {}",
+            size >> 20,
+            path.display()
+        );
+        return Ok(());
+    }
 
     // (name, address, size): explicit --region overrides the PAC's partitions.
     let targets: Vec<(String, u32, u32)> = if region_specs.is_empty() {
@@ -682,29 +813,8 @@ fn cmd_dump(
             })
             .collect::<Result<Vec<_>>>()?
     };
-    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
-
-    let dl = resolve_download_port(port, enter_download)?;
-    println!("Download port: {dl}");
-    let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
 
     let regions: Vec<(u32, u32)> = targets.iter().map(|(_, a, s)| (*a, *s)).collect();
-    let mut state: (String, i64) = (String::new(), -1);
-    let mut progress = |stage: &str, done: u64, total: u64| {
-        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
-        if stage != state.0 {
-            if !state.0.is_empty() {
-                println!();
-            }
-            state = (stage.to_string(), -1);
-        }
-        if pct != state.1 {
-            state.1 = pct;
-            print!("\r  {stage:<16} {pct:3}%");
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-        }
-    };
     let dumps = Flasher::new(FlashOptions::default())
         .dump(&mut serial, &info, &mmap, &regions, &mut progress)
         .map_err(|e| anyhow::anyhow!("{e}"))?;

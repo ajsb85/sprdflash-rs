@@ -181,27 +181,33 @@ impl MockTransport {
                         let off =
                             u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
                         // Flat-addressable flash: find the written region that
-                        // contains `addr` and slice from (addr - base + off).
-                        let mut slice = self
-                            .flash
-                            .iter()
-                            .find(|(base, buf)| {
-                                addr >= **base && (addr - **base) as usize <= buf.len()
-                            })
-                            .and_then(|(base, buf)| {
-                                let start = (addr - base) as usize + off;
-                                buf.get(start..(start + sz).min(buf.len()))
-                                    .map(<[u8]>::to_vec)
-                            })
-                            .unwrap_or_default();
-                        if self.corrupt_readback && !slice.is_empty() {
-                            slice[0] ^= 0xFF;
+                        // contains `addr` and slice from (addr - base + off). An
+                        // out-of-range address replies INVALID_CMD, like the real
+                        // FDL2 — so `dump_full`'s size discovery can find the edge.
+                        let region = self.flash.iter().find(|(base, buf)| {
+                            addr >= **base && ((addr - **base) as usize) < buf.len()
+                        });
+                        if let Some((base, buf)) = region {
+                            let start = (addr - base) as usize + off;
+                            let mut slice = buf
+                                .get(start..(start + sz).min(buf.len()))
+                                .unwrap_or(&[])
+                                .to_vec();
+                            if self.corrupt_readback && !slice.is_empty() {
+                                slice[0] ^= 0xFF;
+                            }
+                            self.out.extend(bsl::build_message(
+                                bsl::rep::READ_FLASH,
+                                &slice,
+                                Checksum::Sprd,
+                            ));
+                        } else {
+                            self.out.extend(bsl::build_message(
+                                bsl::rep::INVALID_CMD,
+                                &[],
+                                Checksum::Sprd,
+                            ));
                         }
-                        self.out.extend(bsl::build_message(
-                            bsl::rep::READ_FLASH,
-                            &slice,
-                            Checksum::Sprd,
-                        ));
                     } else {
                         self.out
                             .extend(bsl::build_message(bsl::rep::ACK, &[], Checksum::Sprd));

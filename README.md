@@ -102,6 +102,8 @@ sprdflash reset       # reboot a device stuck in FDL2 after an aborted flash
 
 # extract every partition off a device (read-only) — byte-exact backup/clone
 sprdflash dump --enter-download --pac firmware.pac --out ./dump
+# whole-flash backup — auto-discovers the size, no partition layout needed
+sprdflash dump --full --enter-download --pac firmware.pac --out ./dump
 # capture a reference unit into a flashable golden .pac
 sprdflash clone --enter-download --pac firmware.pac --out golden.pac
 ```
@@ -111,9 +113,13 @@ one `<file_id>.bin` per partition — no writes to the device. The PAC supplies 
 FDL stages and the partition layout; the dumped bytes are byte-identical
 (verified by SHA-256 on an Air724UG) to what was flashed. Pass `--region
 ADDR:SIZE` (repeatable) to read arbitrary flash ranges instead of the PAC's
-partitions. **Any RDA8910 PAC works for the FDL stages** — they're interchangeable
-across firmware versions for the same chip (hardware-verified), so you don't need
-the device's exact firmware to extract it. `clone` goes one step further: it
+partitions, or `--full` for a **whole-chip backup**: since the RDA8910 FDL2 has no
+geometry command, the flash size is discovered by binary-searching `READ_FLASH`
+(an out-of-range read replies `INVALID_CMD`) — hardware-verified at 8 MiB, with
+every partition matching its offset in the image. **Any RDA8910 PAC works for the
+FDL stages** — they're interchangeable across firmware versions for the same chip
+(hardware-verified), so you don't need the device's exact firmware to extract it.
+`clone` goes one step further: it
 splices the dumped partitions into a copy of the reference PAC and refreshes the
 CRCs, producing a **flashable golden `.pac`** that captures a configured reference
 unit — verified byte-identical round-trip on hardware.
