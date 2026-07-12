@@ -151,7 +151,7 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
                         // fast-fail with no device present) can't busy-spin.
                         std::thread::sleep(Duration::from_millis(500));
                         // Wait for the operator to swap in the next unit.
-                        crate::station::wait_for_removal(stop);
+                        crate::station::wait_for_next_unit(station, stop);
                     }
                 })
                 .expect("spawn station thread");

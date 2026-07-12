@@ -39,6 +39,14 @@ fn ports() -> Vec<PortInfo> {
         .collect()
 }
 
+/// True if a serial port with this exact OS name is currently enumerated. Used
+/// to track one fixture's device across insert/remove without confusing it with
+/// a neighbouring station's port.
+#[must_use]
+pub fn is_present(name: &str) -> bool {
+    ports().iter().any(|p| p.name == name)
+}
+
 /// The download-mode port (`0525:a4a7`), if present.
 #[must_use]
 pub fn find_download_port() -> Option<PortInfo> {

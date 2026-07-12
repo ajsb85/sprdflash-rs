@@ -206,15 +206,53 @@ fn pick_at_port(station: &StationConfig, mods: &[discovery::PortInfo]) -> String
         .unwrap_or_default()
 }
 
-/// Block until the module is unplugged (no download or module port present), so
-/// the next insertion in a continuous run is a fresh unit. Returns early if
-/// `stop` is set.
-pub fn wait_for_removal(stop: &AtomicBool) {
-    while !stop.load(Ordering::Relaxed) {
-        if discovery::find_download_port().is_none() && discovery::find_module_ports().is_empty() {
-            return;
+const PRESENCE_POLL: Duration = Duration::from_millis(250);
+
+/// Wait for this station's *next* unit: block until the current unit is removed
+/// **and** a fresh one is inserted — an absent→present transition on the
+/// station's own port — so a continuous run never re-flashes the unit it just
+/// booted, and neighbouring fixtures don't cross-trigger each other. Returns
+/// early if `stop` is set. A station with no configured port (a single
+/// auto-detected fixture) falls back to a global "any device gone" check.
+pub fn wait_for_next_unit(station: &StationConfig, stop: &AtomicBool) {
+    if station.at_port.is_some() || station.download_port.is_some() {
+        wait_cycle(stop, PRESENCE_POLL, || station_present(station));
+    } else {
+        // No per-fixture identity to track; wait for the bench to go empty.
+        while !stop.load(Ordering::Relaxed) {
+            if discovery::find_download_port().is_none()
+                && discovery::find_module_ports().is_empty()
+            {
+                return;
+            }
+            std::thread::sleep(PRESENCE_POLL);
         }
-        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// True if this station's own device is currently enumerated — its module port
+/// after boot, or its download port. Keyed on the configured port names, which
+/// pin each fixture to its USB slot.
+fn station_present(station: &StationConfig) -> bool {
+    station
+        .at_port
+        .as_deref()
+        .is_some_and(discovery::is_present)
+        || station
+            .download_port
+            .as_deref()
+            .is_some_and(discovery::is_present)
+}
+
+/// Block until `present` transitions true→false (current unit removed) and then
+/// false→true (next unit inserted), or `stop` is set. Split out from discovery
+/// so the transition logic is unit-testable.
+fn wait_cycle(stop: &AtomicBool, poll: Duration, present: impl Fn() -> bool) {
+    while !stop.load(Ordering::Relaxed) && present() {
+        std::thread::sleep(poll); // phase 1: wait for removal
+    }
+    while !stop.load(Ordering::Relaxed) && !present() {
+        std::thread::sleep(poll); // phase 2: wait for the next insertion
     }
 }
 
@@ -225,5 +263,37 @@ fn recover(station: &StationConfig) {
     } else if let Some(at) = &station.at_port {
         let _ = recovery::enter_download_mode(at);
         std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    #[test]
+    fn wait_cycle_waits_for_remove_then_insert() {
+        let stop = AtomicBool::new(false);
+        let calls = AtomicUsize::new(0);
+        // present, present, absent, absent, present -> returns after the insert.
+        let seq = [true, true, false, false, true];
+        let present = || {
+            let n = calls.fetch_add(1, Ordering::Relaxed);
+            seq.get(n).copied().unwrap_or(true)
+        };
+        wait_cycle(&stop, Duration::from_millis(1), present);
+        assert!(
+            calls.load(Ordering::Relaxed) >= seq.len(),
+            "should poll through the whole remove→insert cycle"
+        );
+    }
+
+    #[test]
+    fn wait_cycle_returns_immediately_when_stopped() {
+        let stop = AtomicBool::new(true);
+        // Device is "present" forever, but the stop flag must short-circuit both
+        // phases so a shutdown never hangs.
+        wait_cycle(&stop, Duration::from_millis(10), || true);
     }
 }
