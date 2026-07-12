@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! USB serial-port discovery by VID/PID, and the beacon-window wait.
 
 use std::time::{Duration, Instant};

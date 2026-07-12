@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! PDL link-layer I/O over a [`Serial`] stream (first stage: loads FDL1).
 
 use std::time::{Duration, Instant};

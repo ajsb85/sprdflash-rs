@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! `sprdflash` — native flasher CLI for SPRD/UNISOC `.pac` firmware.
 //!
 //! Commands: `info`, `list-ports`, and `flash` (PDL → BSL → partitions →
@@ -7,13 +10,13 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use memmap2::Mmap;
 use sprdflash_core::pac;
 use sprdflash_core::plan::{self, Role};
 use sprdflash_flash::{FlashOptions, Flasher};
-use sprdflash_transport::{discovery, recovery, Serial};
+use sprdflash_transport::{Serial, discovery, recovery};
 
 /// BootROM / download-mode USB identity (SPRD download gadget).
 const DOWNLOAD_VID: u16 = 0x0525;
@@ -157,7 +160,7 @@ struct LineArgs {
 }
 
 fn cmd_line(a: LineArgs) -> Result<()> {
-    use sprdflash_line::{run as run_line, LineConfig};
+    use sprdflash_line::{LineConfig, run as run_line};
 
     let file = File::open(&a.pac).with_context(|| format!("opening {}", a.pac.display()))?;
     let mmap = unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", a.pac.display()))?;

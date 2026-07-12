@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! A single station: take one unit through flash → boot-verify → record, with
 //! bounded retries and recovery. Stations are independent and run on their own
 //! thread, so one bad unit never stalls its neighbours.
@@ -6,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use sprdflash_core::pac::PacInfo;
 use sprdflash_flash::{FlashOptions, Flasher};
-use sprdflash_transport::{discovery, recovery, Serial};
+use sprdflash_transport::{Serial, discovery, recovery};
 
 use crate::record::{Outcome, UnitRecord};
 use crate::verify::verify_boot;

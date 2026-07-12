@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! The [`Flasher`]: PDL → BSL → partitions → format → reset.
 
 use std::time::Instant;
@@ -6,9 +9,9 @@ use sprdflash_core::pac::PacInfo;
 use sprdflash_core::{bsl, plan};
 use sprdflash_transport::Serial;
 
+use crate::FlashOptions;
 use crate::bsl_io::{BslError, BslIo};
 use crate::pdl_io::{PdlError, PdlIo};
-use crate::FlashOptions;
 
 /// Progress callback: `(stage, done_bytes, total_bytes)`.
 pub type Progress<'a> = &'a mut dyn FnMut(&str, u64, u64);

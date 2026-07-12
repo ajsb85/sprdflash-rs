@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Turn a parsed PAC into an ordered flash plan.
 //!
 //! This module encodes the cross-SDK format behaviour that was reverse
@@ -13,9 +16,9 @@
 //!      with a sum32-checked `START_DATA`;
 //!    - `PREPACK` → the prepack blob, plain.
 
+use crate::LOGICAL_ADDRESS_BASE;
 use crate::checksum::{crc16_arc, sum32};
 use crate::pac::{PacEntry, PacInfo};
-use crate::LOGICAL_ADDRESS_BASE;
 
 /// Role of a PAC entry in the flash flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

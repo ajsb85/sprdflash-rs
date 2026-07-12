@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! The four checksums used across the SPRD/UNISOC download protocol.
 //!
 //! | function          | polynomial / rule        | used for                         |

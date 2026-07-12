@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Manufacturing-line orchestrator for `sprdflash-rs`.
 //!
 //! One thread per fixture ([`station`]), each taking a unit through
@@ -10,7 +13,7 @@ pub mod record;
 pub mod station;
 pub mod verify;
 
-pub use line::{run, LineConfig, LineSummary};
+pub use line::{LineConfig, LineSummary, run};
 pub use record::{Outcome, UnitRecord};
 pub use station::StationConfig;
-pub use verify::{verify_boot, BootInfo};
+pub use verify::{BootInfo, verify_boot};

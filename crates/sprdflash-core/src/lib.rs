@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Pure, sans-I/O protocol core for flashing SPRD/UNISOC `.pac` firmware.
 //!
 //! This crate contains **no I/O**: every function either transforms bytes or

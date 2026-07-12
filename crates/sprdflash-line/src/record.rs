@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Per-unit result records — the append-only, MES-ready trace of every flash.
 
 use std::time::{SystemTime, UNIX_EPOCH};

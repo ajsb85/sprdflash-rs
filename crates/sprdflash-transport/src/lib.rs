@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Serial transport, USB port discovery, and device recovery for `sprdflash-rs`.
 //!
 //! Cross-platform (Windows + Linux/WSL) via the `serialport` crate. The

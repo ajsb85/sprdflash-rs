@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Parser and validator for SPRD/UNISOC `.pac` firmware packages.
 //!
 //! Layout: a fixed 2124-byte UTF-16LE header, a table of 2580-byte per-file

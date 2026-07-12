@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! PDL (Packet Download Loader) — the first-stage link layer.
 //!
 //! The RDA8910/UIS8910 download agent (USB `0525:a4a7`, reached via

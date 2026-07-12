@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Device flash driver: ties the sans-I/O protocol core to a serial transport.
 //!
 //! Flow (verified on real RDA8910 hardware):

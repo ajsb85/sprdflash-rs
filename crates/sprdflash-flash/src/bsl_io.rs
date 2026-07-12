@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! BSL link-layer I/O over a [`Serial`] stream (FDL2 + partitions).
 
 use std::time::{Duration, Instant};

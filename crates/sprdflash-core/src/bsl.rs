@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! BSL — the Spreadtrum/UNISOC download protocol over HDLC framing.
 //!
 //! Used for FDL2 and the partition writes (after PDL hands over). One message:

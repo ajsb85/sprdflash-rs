@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Post-flash boot verification: confirm the module boots and read back its
 //! firmware banner and IMEI over the AT port. This closes the loop on the line —
 //! a unit is only "pass" once it has actually come up reporting the right build.

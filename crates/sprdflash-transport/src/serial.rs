@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! The [`Serial`] byte stream — a thin, robust wrapper over `serialport`.
 //!
 //! Everything the download protocol needs from the wire is here: separate

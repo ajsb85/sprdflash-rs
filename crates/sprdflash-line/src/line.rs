@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! The line orchestrator: run every station in parallel, stream per-unit
 //! records, and aggregate throughput/yield metrics.
 
@@ -10,7 +13,7 @@ use sprdflash_core::pac::PacInfo;
 use sprdflash_flash::FlashOptions;
 
 use crate::record::{Outcome, UnitRecord};
-use crate::station::{run_unit, StationConfig, UnitJob};
+use crate::station::{StationConfig, UnitJob, run_unit};
 
 /// Line-wide configuration.
 #[derive(Debug, Clone)]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// SPDX-FileCopyrightText: 2026 Alexander Salas Bastidas <ajsb85@firechip.dev>
+
 //! Getting the module into download mode, and recovering a stuck agent.
 //!
 //! Happy path: [`enter_download_mode`] sends `AT*DOWNLOAD=1` on the module's AT
