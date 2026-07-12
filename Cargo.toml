@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/ajsb85/sprdflash-rs"
+authors = ["ajsb85"]
+
+[workspace.dependencies]
+sprdflash-core = { path = "crates/sprdflash-core", version = "0.1.0" }
+thiserror = "2"
+tracing = "0.1"
+
+# Release profile tuned for a manufacturing binary: fast, small, and with
+# overflow checks kept ON (correctness on the line beats a few cycles).
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = true

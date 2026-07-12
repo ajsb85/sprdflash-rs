@@ -1,0 +1,19 @@
+[package]
+name = "sprdflash-core"
+description = "Pure, sans-I/O protocol core for flashing SPRD/UNISOC .pac firmware (RDA8910/UIS8910): PAC parsing, PDL + BSL framing, checksums, and the cross-SDK flash plan."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"

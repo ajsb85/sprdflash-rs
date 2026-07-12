@@ -1,0 +1,26 @@
+[package]
+name = "sprdflash-cli"
+description = "Command-line flasher for SPRD/UNISOC .pac firmware (RDA8910/UIS8910) - native, no vendor tool."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "sprdflash"
+path = "src/main.rs"
+
+[dependencies]
+sprdflash-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serialport = "4"
+memmap2 = "0.9"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.clippy]
+all = "warn"
