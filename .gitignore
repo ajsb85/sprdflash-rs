@@ -1,0 +1,5 @@
+/target
+**/*.rs.bk
+*.pdb
+Cargo.lock.orig
+# keep Cargo.lock committed: this is a manufacturing binary, builds must be reproducible
