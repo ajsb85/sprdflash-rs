@@ -12,7 +12,7 @@ pub mod discovery;
 pub mod recovery;
 pub mod serial;
 
-pub use serial::{Serial, TransportError};
+pub use serial::{Serial, Transport, TransportError, read_until};
 
 /// BootROM / download-mode USB identity (SPRD download gadget).
 pub const DOWNLOAD_VID: u16 = 0x0525;

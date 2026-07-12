@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use sprdflash_core::pac::PacInfo;
 use sprdflash_core::{bsl, plan};
-use sprdflash_transport::Serial;
+use sprdflash_transport::Transport;
 
 use crate::FlashOptions;
 use crate::bsl_io::{BslError, BslIo};
@@ -75,7 +75,7 @@ impl Flasher {
     /// Flash `pac` (its parsed `info`) to the module on `port`.
     pub fn run(
         &self,
-        port: &mut Serial,
+        port: &mut dyn Transport,
         info: &PacInfo,
         pac: &[u8],
         progress: Progress,

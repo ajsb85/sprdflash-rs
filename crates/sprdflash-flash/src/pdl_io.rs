@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use sprdflash_core::pdl;
-use sprdflash_transport::{Serial, TransportError};
+use sprdflash_transport::{Transport, TransportError, read_until};
 
 /// PDL I/O errors.
 #[derive(Debug, thiserror::Error)]
@@ -19,15 +19,15 @@ pub enum PdlError {
     NoVersion,
 }
 
-/// PDL transport bound to a serial port.
+/// PDL transport bound to a byte stream.
 pub struct PdlIo<'a> {
-    port: &'a mut Serial,
+    port: &'a mut dyn Transport,
     timeout: Duration,
 }
 
 impl<'a> PdlIo<'a> {
-    /// Wrap a serial port with a default per-command `timeout`.
-    pub fn new(port: &'a mut Serial, timeout: Duration) -> Self {
+    /// Wrap a transport with a default per-command `timeout`.
+    pub fn new(port: &'a mut dyn Transport, timeout: Duration) -> Self {
         Self { port, timeout }
     }
 
@@ -44,9 +44,7 @@ impl<'a> PdlIo<'a> {
         self.send(payload)?;
         let deadline = Instant::now() + timeout;
         let mut acc = Vec::new();
-        let resp = self
-            .port
-            .read_until(&mut acc, deadline, pdl::try_parse_response)?;
+        let resp = read_until(self.port, &mut acc, deadline, pdl::try_parse_response)?;
         Ok(resp)
     }
 

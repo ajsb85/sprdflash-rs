@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use sprdflash_core::bsl::{self, Checksum};
-use sprdflash_transport::{Serial, TransportError};
+use sprdflash_transport::{Transport, TransportError, read_until};
 
 /// BSL I/O errors.
 #[derive(Debug, thiserror::Error)]
@@ -38,17 +38,17 @@ impl BslError {
     }
 }
 
-/// BSL transport bound to a serial port.
+/// BSL transport bound to a byte stream.
 pub struct BslIo<'a> {
-    port: &'a mut Serial,
+    port: &'a mut dyn Transport,
     /// Session checksum (Spreadtrum sum on RDA8910/UIS8910).
     pub checksum: Checksum,
     timeout: Duration,
 }
 
 impl<'a> BslIo<'a> {
-    /// Wrap a serial port; RDA8910/UIS8910 speaks the Spreadtrum sum.
-    pub fn new(port: &'a mut Serial, timeout: Duration) -> Self {
+    /// Wrap a transport; RDA8910/UIS8910 speaks the Spreadtrum sum.
+    pub fn new(port: &'a mut dyn Transport, timeout: Duration) -> Self {
         Self {
             port,
             checksum: Checksum::Sprd,
@@ -67,7 +67,7 @@ impl<'a> BslIo<'a> {
     pub fn recv(&mut self, timeout: Duration) -> Result<(u16, Vec<u8>), BslError> {
         let deadline = Instant::now() + timeout;
         let mut acc = Vec::new();
-        let body = self.port.read_until(&mut acc, deadline, find_frame_body)?;
+        let body = read_until(self.port, &mut acc, deadline, find_frame_body)?;
         let (t, data) = bsl::parse_message(&body)?;
         Ok((t, data.to_vec()))
     }
@@ -146,8 +146,8 @@ impl<'a> BslIo<'a> {
         Ok(())
     }
 
-    /// Access the underlying port (for baud changes / teardown).
-    pub fn port(&mut self) -> &mut Serial {
+    /// Access the underlying transport (for baud changes / teardown).
+    pub fn port(&mut self) -> &mut dyn Transport {
         self.port
     }
 }

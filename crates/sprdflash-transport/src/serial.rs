@@ -36,6 +36,50 @@ pub enum TransportError {
     Timeout(Duration),
 }
 
+/// The byte-stream operations the download protocol needs. Abstracting the wire
+/// behind this trait lets the flash driver run over a real serial port
+/// ([`Serial`]) or a mock end-to-end in tests, with no hardware.
+pub trait Transport {
+    /// Write all of `data` as one wire write (PDL needs the header and payload
+    /// to be *separate* `write_all` calls).
+    fn write_all(&mut self, data: &[u8]) -> Result<(), TransportError>;
+    /// Read whatever bytes are available; a timeout yields `Ok(0)`, not an error.
+    fn read_some(&mut self, buf: &mut [u8]) -> Result<usize, TransportError>;
+    /// Change the line baud rate (for `CHANGE_BAUD`).
+    fn set_baud(&mut self, baud: u32) -> Result<(), TransportError>;
+    /// Discard any buffered input (before a fresh handshake).
+    fn purge_input(&mut self);
+    /// Flush and hold the line briefly before the port is dropped, so an
+    /// in-flight `NORMAL_RESET` lands instead of being cancelled.
+    fn reset_teardown(&mut self, hold: Duration);
+}
+
+/// Read until `pred(accumulated)` returns `Some(value)` or `deadline` passes.
+/// Accumulated bytes are kept in `acc` so partial frames survive across calls.
+pub fn read_until<R>(
+    port: &mut dyn Transport,
+    acc: &mut Vec<u8>,
+    deadline: Instant,
+    mut pred: impl FnMut(&[u8]) -> Option<R>,
+) -> Result<R, TransportError> {
+    if let Some(v) = pred(acc) {
+        return Ok(v);
+    }
+    let mut tmp = [0u8; 4096];
+    while Instant::now() < deadline {
+        let n = port.read_some(&mut tmp)?;
+        if n > 0 {
+            acc.extend_from_slice(&tmp[..n]);
+            if let Some(v) = pred(acc) {
+                return Ok(v);
+            }
+        }
+    }
+    Err(TransportError::Timeout(
+        deadline.saturating_duration_since(Instant::now()),
+    ))
+}
+
 /// A robust serial byte stream for the download protocol.
 pub struct Serial {
     port: Box<dyn SerialPort>,
@@ -83,21 +127,25 @@ impl Serial {
         &self.name
     }
 
-    /// Write all of `data` to the wire. PDL requires the header and payload to be
-    /// *separate* `write_all` calls, which this preserves (each maps to its own
-    /// `WriteFile`). `flush` is best-effort: the `sprd_rdavcom` virtual COM driver
-    /// rejects `FlushFileBuffers` with ERROR_INVALID_FUNCTION, and the bytes are
-    /// already handed to the driver by `write_all`.
-    pub fn write_all(&mut self, data: &[u8]) -> Result<(), TransportError> {
+    /// Set DTR and RTS together.
+    pub fn set_dtr_rts(&mut self, on: bool) -> Result<(), TransportError> {
+        self.port.write_data_terminal_ready(on)?;
+        self.port.write_request_to_send(on)?;
+        Ok(())
+    }
+}
+
+impl Transport for Serial {
+    /// `flush` is best-effort: the `sprd_rdavcom` virtual COM driver rejects
+    /// `FlushFileBuffers` with ERROR_INVALID_FUNCTION, and the bytes are already
+    /// handed to the driver by `write_all`.
+    fn write_all(&mut self, data: &[u8]) -> Result<(), TransportError> {
         self.port.write_all(data)?;
         let _ = self.port.flush();
         Ok(())
     }
 
-    /// Read whatever bytes are available into `buf`, returning the count. A
-    /// timeout yields `Ok(0)` rather than an error, so callers can poll against
-    /// their own deadline.
-    pub fn read_some(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
+    fn read_some(&mut self, buf: &mut [u8]) -> Result<usize, TransportError> {
         match self.port.read(buf) {
             Ok(n) => Ok(n),
             Err(e) if e.kind() == ErrorKind::TimedOut || e.kind() == ErrorKind::WouldBlock => Ok(0),
@@ -105,55 +153,16 @@ impl Serial {
         }
     }
 
-    /// Read until `pred(accumulated)` returns `Some(value)` or `deadline` passes.
-    /// Accumulated bytes are kept in `acc` so partial frames survive across calls.
-    pub fn read_until<T>(
-        &mut self,
-        acc: &mut Vec<u8>,
-        deadline: Instant,
-        mut pred: impl FnMut(&[u8]) -> Option<T>,
-    ) -> Result<T, TransportError> {
-        if let Some(v) = pred(acc) {
-            return Ok(v);
-        }
-        let mut tmp = [0u8; 4096];
-        while Instant::now() < deadline {
-            let n = self.read_some(&mut tmp)?;
-            if n > 0 {
-                acc.extend_from_slice(&tmp[..n]);
-                if let Some(v) = pred(acc) {
-                    return Ok(v);
-                }
-            }
-        }
-        Err(TransportError::Timeout(
-            deadline.saturating_duration_since(Instant::now()),
-        ))
-    }
-
-    /// Set DTR and RTS together.
-    pub fn set_dtr_rts(&mut self, on: bool) -> Result<(), TransportError> {
-        self.port.write_data_terminal_ready(on)?;
-        self.port.write_request_to_send(on)?;
-        Ok(())
-    }
-
-    /// Change the line baud rate (for `CHANGE_BAUD`).
-    pub fn set_baud(&mut self, baud: u32) -> Result<(), TransportError> {
+    fn set_baud(&mut self, baud: u32) -> Result<(), TransportError> {
         self.port.set_baud_rate(baud)?;
         Ok(())
     }
 
-    /// Discard any buffered input (before a fresh handshake).
-    pub fn purge_input(&mut self) {
+    fn purge_input(&mut self) {
         let _ = self.port.clear(serialport::ClearBuffer::Input);
     }
 
-    /// Reset teardown: flush the last frame and hold the line briefly before the
-    /// port is dropped. Closing immediately cancels an in-flight `NORMAL_RESET`
-    /// (Windows `CloseHandle` aborts pending I/O), leaving the module in download
-    /// mode instead of booting.
-    pub fn reset_teardown(&mut self, hold: Duration) {
+    fn reset_teardown(&mut self, hold: Duration) {
         let _ = self.port.flush();
         std::thread::sleep(hold);
     }
