@@ -1,0 +1,4 @@
+# Normalize to LF for all text; Rust/toml/yaml stay LF on every platform.
+* text=auto eol=lf
+*.png binary
+*.pac binary
