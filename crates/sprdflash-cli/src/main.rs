@@ -60,7 +60,9 @@ enum Command {
         /// Also format the filesystem + refresh NV/prepack (firmware-TYPE change).
         #[arg(long)]
         format: bool,
-        /// MIDST chunk size (bytes). Larger = fewer round trips = faster.
+        /// MIDST chunk size (bytes). Larger = fewer round trips = faster on a
+        /// direct connection; use a smaller value (e.g. 512) over usbipd -> WSL,
+        /// where cdc_acm stalls on 2 KB frames at the tail of a big transfer.
         #[arg(long, default_value_t = 2048)]
         chunk: usize,
         /// Issue CHANGE_BAUD to this rate after FDL2 (experimental speed lever).

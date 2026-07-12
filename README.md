@@ -90,6 +90,28 @@ sprdflash list-ports
 
 Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (WSL Ubuntu).
 
+## Flashing from WSL over usbipd
+
+On a native Linux host the download gadget is a normal `/dev/ttyACM0`, and
+flashing works exactly as on Windows. To reach a Windows-attached device from
+**WSL**, forward it with [usbipd-win](https://github.com/dorssel/usbipd-win):
+
+```powershell
+usbipd bind   --busid <BUSID>            # once, elevated
+usbipd attach --wsl --busid <BUSID>      # module -> /dev/ttyUSB*, download -> /dev/ttyACM0
+```
+
+```bash
+# in WSL, as root (or add your user to the dialout group)
+sprdflash flash --port /dev/ttyACM0 --chunk 512 --format firmware.pac
+```
+
+**Use `--chunk 512` over usbipd.** The default 2 KB MIDST frames are ideal on a
+direct connection, but the generic `cdc_acm` driver behind usbipd stalls on
+large frames at the tail of a multi-MB transfer; 512 B is reliable end-to-end
+(verified: full 6 MB flash + format + boot, IMEI intact). A native Linux
+manufacturing host has no usbipd tunnel and runs the default 2 KB fine.
+
 ## Running the line
 
 Each `--station` runs on its own thread; they flash and boot-verify in parallel,
