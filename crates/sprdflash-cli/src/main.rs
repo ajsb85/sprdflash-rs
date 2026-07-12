@@ -108,6 +108,9 @@ enum Command {
         /// Append per-unit JSON-lines records here (MES / audit log).
         #[arg(long)]
         records: Option<PathBuf>,
+        /// Serve live Prometheus metrics at http://ADDR/metrics (e.g. 0.0.0.0:9184).
+        #[arg(long)]
+        metrics_addr: Option<String>,
     },
 }
 
@@ -153,6 +156,7 @@ fn main() -> Result<()> {
             work_order,
             operator,
             records,
+            metrics_addr,
         } => cmd_line(LineArgs {
             pac,
             stations,
@@ -163,6 +167,7 @@ fn main() -> Result<()> {
             work_order,
             operator,
             records,
+            metrics_addr,
         }),
     }
 }
@@ -177,6 +182,7 @@ struct LineArgs {
     work_order: Option<String>,
     operator: Option<String>,
     records: Option<PathBuf>,
+    metrics_addr: Option<String>,
 }
 
 fn cmd_line(a: LineArgs) -> Result<()> {
@@ -213,6 +219,7 @@ fn cmd_line(a: LineArgs) -> Result<()> {
         work_order: a.work_order,
         operator: a.operator,
         records_path: a.records,
+        metrics_addr: a.metrics_addr,
     };
     let summary = run_line(&info, &mmap, &pac_name, &cfg);
 

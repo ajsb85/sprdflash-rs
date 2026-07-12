@@ -123,7 +123,8 @@ power-cycle on Linux) with bounded retries.
 ```
 > sprdflash line firmware.pac \
     --station fixture-1:COM12 --station fixture-2:COM22 --station fixture-3:COM32 \
-    --format --records /var/log/flash/units.jsonl
+    --format --work-order WO-2026-0142 --operator alice \
+    --records /var/log/flash/units.jsonl --metrics-addr 0.0.0.0:9184
 
 ── results ──
   [PASS] fixture-1     41.0s  LuatOS-Air_V4035_...  IMEI 8634880509...
@@ -132,6 +133,11 @@ power-cycle on Linux) with bounded retries.
 
 3/3 passed in 41.3s  →  ~261 good units/hour at this concurrency
 ```
+
+Each record carries per-phase timings and the `--work-order`/`--operator`
+context; `--metrics-addr` serves live Prometheus counters at `/metrics`, and
+[`tools/mes_ingest.py`](tools/mes_ingest.py) loads the JSON lines into the
+Postgres KPI schema (see [docs/](docs/)).
 
 Each unit is one JSON line for the MES / audit log:
 

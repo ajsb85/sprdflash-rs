@@ -9,11 +9,13 @@
 //! one bad unit never stalls the line; per-unit JSON-lines records feed the MES.
 
 pub mod line;
+pub mod metrics;
 pub mod record;
 pub mod station;
 pub mod verify;
 
 pub use line::{LineConfig, LineSummary, run};
+pub use metrics::Metrics;
 pub use record::{Outcome, UnitRecord};
 pub use station::StationConfig;
 pub use verify::{BootInfo, verify_boot};

@@ -6,12 +6,14 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use sprdflash_core::pac::PacInfo;
 use sprdflash_flash::FlashOptions;
 
+use crate::metrics::{self, Metrics};
 use crate::record::{Outcome, UnitRecord};
 use crate::station::{StationConfig, UnitJob, run_unit};
 
@@ -34,6 +36,8 @@ pub struct LineConfig {
     pub operator: Option<String>,
     /// Append per-unit JSON-lines records here (for the MES / audit log).
     pub records_path: Option<PathBuf>,
+    /// If set, serve live Prometheus metrics at `http://<addr>/metrics`.
+    pub metrics_addr: Option<String>,
 }
 
 /// Aggregate result of a line run.
@@ -78,6 +82,14 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
         })
         .map(Mutex::new);
 
+    // Optional live Prometheus exporter (runs alongside the stations).
+    let metrics = Arc::new(Metrics::default());
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let server = cfg.metrics_addr.as_ref().map(|addr| {
+        let (m, s, a) = (metrics.clone(), shutdown.clone(), addr.clone());
+        std::thread::spawn(move || metrics::serve(&a, m, s))
+    });
+
     let wall = Instant::now();
     std::thread::scope(|scope| {
         for station in &cfg.stations {
@@ -93,6 +105,7 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
             };
             let records = &records;
             let sink = &sink;
+            let metrics = &metrics;
             std::thread::Builder::new()
                 .name(station.label.clone())
                 .spawn_scoped(scope, move || {
@@ -104,6 +117,7 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
                         secs = rec.total_seconds,
                         "done"
                     );
+                    metrics.record(&rec);
                     if let Some(m) = sink {
                         if let Ok(mut f) = m.lock() {
                             let _ = writeln!(f, "{}", rec.to_json_line());
@@ -114,6 +128,13 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
                 .expect("spawn station thread");
         }
     });
+
+    // Hold the exporter open briefly so a scraper can catch the final numbers.
+    if let Some(server) = server {
+        std::thread::sleep(Duration::from_secs(2));
+        shutdown.store(true, Ordering::Relaxed);
+        let _ = server.join();
+    }
 
     let records = records.into_inner().expect("records mutex");
     let wall_seconds = wall.elapsed().as_secs_f64();

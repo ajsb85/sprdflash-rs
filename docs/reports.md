@@ -77,8 +77,12 @@ All computed from `flash_record` (see
 - ✅ **Reference ingester** (`tools/mes_ingest.py`): loads the JSON lines into the
   `flash_event` landing zone; the KPI views make yield/throughput/defects
   queryable with zero ETL.
+- ✅ **Prometheus exporter** (`--metrics-addr`): live `sprdflash_units_total`
+  (by result), `sprdflash_retries_total`, `sprdflash_bytes_total`, and
+  `sprdflash_flash_seconds_total` at `/metrics`, for Grafana alongside the batch
+  KPIs.
 
 ## Roadmap
 
-- **Prometheus exporter**: live `units_total{result=}`, a `flash_seconds`
-  histogram, and `station_up` for Grafana alongside the batch KPIs.
+- **Continuous line mode**: keep stations flashing units in a loop (so the
+  exporter is live indefinitely and the line runs unattended).
