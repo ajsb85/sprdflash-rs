@@ -37,7 +37,10 @@ impl Default for FlashOptions {
             disable_transcode: false,
             reset: true,
             reset_hold: Duration::from_millis(1000),
-            timeout: Duration::from_secs(2),
+            // 5 s absorbs USB jitter (notably usbipd → WSL latency spikes) while
+            // still failing fast on a genuinely dead agent. ACKs normally arrive
+            // in milliseconds, so this only bites when something is wrong.
+            timeout: Duration::from_secs(5),
             exec_timeout: Duration::from_secs(15),
         }
     }

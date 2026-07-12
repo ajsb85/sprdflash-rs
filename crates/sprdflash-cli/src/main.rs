@@ -66,6 +66,10 @@ enum Command {
         /// Issue CHANGE_BAUD to this rate after FDL2 (experimental speed lever).
         #[arg(long)]
         baud: Option<u32>,
+        /// Per-command response timeout, seconds (raise for high-latency links
+        /// such as usbipd → WSL).
+        #[arg(long, default_value_t = 5.0)]
+        timeout: f64,
         /// Do not reset the module after flashing.
         #[arg(long)]
         no_reset: bool,
@@ -117,6 +121,7 @@ fn main() -> Result<()> {
             format,
             chunk,
             baud,
+            timeout,
             no_reset,
             no_verify,
         } => cmd_flash(FlashArgs {
@@ -126,6 +131,7 @@ fn main() -> Result<()> {
             format,
             chunk,
             baud,
+            timeout,
             no_reset,
             verify: !no_verify,
         }),
@@ -270,6 +276,7 @@ struct FlashArgs {
     format: bool,
     chunk: usize,
     baud: Option<u32>,
+    timeout: f64,
     no_reset: bool,
     verify: bool,
 }
@@ -292,6 +299,7 @@ fn cmd_flash(a: FlashArgs) -> Result<()> {
         chunk: a.chunk,
         baud: a.baud,
         reset: !a.no_reset,
+        timeout: std::time::Duration::from_secs_f64(a.timeout.max(0.1)),
         ..Default::default()
     };
 
