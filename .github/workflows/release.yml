@@ -1,0 +1,87 @@
+name: Release
+
+# Cut a release by pushing a signed tag: `git tag -s v0.2.0 && git push origin v0.2.0`.
+# This builds, (optionally SSH-)signs, attests, and attaches binaries for every
+# platform. To SSH-sign the assets, add the private key as the SSH_SIGNING_KEY
+# repository secret; without it, builds are still attested (keyless provenance).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  create:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release if it does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "SPRD Flash Tool $GITHUB_REF_NAME" --generate-notes
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: create
+    env:
+      SSH_SIGNING_KEY: ${{ secrets.SSH_SIGNING_KEY }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe" }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: "" }
+          - { os: macos-latest, target: aarch64-apple-darwin, ext: "" }
+          - { os: macos-latest, target: x86_64-apple-darwin, ext: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux serial deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p sprdflash-cli
+
+      - name: Package
+        id: pkg
+        shell: bash
+        run: |
+          name="sprdflash-${GITHUB_REF_NAME}-${{ matrix.target }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/sprdflash${{ matrix.ext }}" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Sign (SSH, optional)
+        if: env.SSH_SIGNING_KEY != ''
+        shell: bash
+        run: |
+          key="$(mktemp)"; printf '%s\n' "$SSH_SIGNING_KEY" > "$key"; chmod 600 "$key"
+          ssh-keygen -Y sign -f "$key" -n file "${{ steps.pkg.outputs.name }}"
+          rm -f "$key"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ steps.pkg.outputs.name }}
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="${{ steps.pkg.outputs.name }}"
+          [ -f "${{ steps.pkg.outputs.name }}.sig" ] && files="$files ${{ steps.pkg.outputs.name }}.sig"
+          gh release upload "$GITHUB_REF_NAME" $files --repo "$GITHUB_REPOSITORY" --clobber
