@@ -60,7 +60,7 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
 | crate                | status | role                                                          |
 |----------------------|--------|---------------------------------------------------------------|
 | `sprdflash-core`     | ✅ done | sans-I/O protocol: PAC parse, PDL + BSL framing, checksums, plan |
-| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line`, `reset`, `dump`, `clone`, `parts` | the `sprdflash` binary |
+| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line`, `reset`, `dump`, `clone`, `parts`, `layout` | the `sprdflash` binary |
 | `sprdflash-transport`| ✅ done | `Transport` trait over `serialport`, port discovery, beacon-window connect, recovery |
 | `sprdflash-flash`    | ✅ done | device driver: PDL→BSL→partitions→format→reset, `CHANGE_BAUD`, read-back verify, `MockTransport` |
 | `sprdflash-line`     | ✅ done | parallel stations, boot-verify (ATI/IMEI), JSON-lines records, metrics, continuous mode |
@@ -104,9 +104,19 @@ sprdflash reset       # reboot a device stuck in FDL2 after an aborted flash
 sprdflash dump --enter-download --pac firmware.pac --out ./dump
 # whole-flash backup — auto-discovers the size, no partition layout needed
 sprdflash dump --full --enter-download --pac firmware.pac --out ./dump
+# reconstruct a proposed layout (<BMAConfig>) from that dump — offline, no PAC
+sprdflash layout --flash ./dump/flash.bin --out layout.xml
 # capture a reference unit into a flashable golden .pac
 sprdflash clone --enter-download --pac firmware.pac --out golden.pac
 ```
+
+`layout` recovers the partition geometry from a whole-flash dump *alone*: it
+classifies on-flash content — U-Boot `uImage` code regions (CRC-verified exact
+sizes), LuatOS `luadb`, and the NOR filesystem — and emits a proposed
+`<BMAConfig>`. Verified byte-exact against the real PAC on an Air724UG (5/5
+flash-resident partition bases + sizes). Region **names** are generic
+content-type defaults (`uimage_0`, `luadb_0`, …), not PAC roles — the flash
+stores no role names, and roles are firmware-specific.
 
 `dump` reads each partition straight off the flash with `READ_FLASH` and writes
 one `<file_id>.bin` per partition — no writes to the device. The PAC supplies the
