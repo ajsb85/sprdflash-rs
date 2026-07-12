@@ -54,6 +54,23 @@ enum Command {
         #[arg(long)]
         port: Option<String>,
     },
+    /// Read the device's partitions back off the flash (read-only) into files.
+    /// The .pac supplies this device's FDL1/FDL2 stages and the partition layout
+    /// (addresses + sizes); its partition payloads are not used.
+    Dump {
+        /// PAC providing the FDL stages and partition layout for this device.
+        #[arg(long)]
+        pac: PathBuf,
+        /// Output directory; one <file_id>.bin per partition is written here.
+        #[arg(long)]
+        out: PathBuf,
+        /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
+        #[arg(long)]
+        port: Option<String>,
+        /// Send AT*DOWNLOAD=1 on the module's AT port first (auto mode-switch).
+        #[arg(long)]
+        enter_download: bool,
+    },
     /// Flash a .pac to the module natively (PDL + BSL, no vendor tool).
     Flash {
         /// Path to the .pac file.
@@ -140,6 +157,12 @@ fn main() -> Result<()> {
         Command::Info { pac, no_verify } => cmd_info(&pac, !no_verify),
         Command::ListPorts => cmd_list_ports(),
         Command::Reset { port } => cmd_reset(port),
+        Command::Dump {
+            pac,
+            out,
+            port,
+            enter_download,
+        } => cmd_dump(&pac, &out, port, enter_download),
         Command::Flash {
             pac,
             port,
@@ -433,6 +456,76 @@ fn resolve_download_port(explicit: Option<String>, enter_download: bool) -> Resu
             .context("download port did not appear after AT*DOWNLOAD");
     }
     bail!("no download port (0525:a4a7) found; pass --port or --enter-download")
+}
+
+/// Read the device's partitions back off flash into `<out>/<file_id>.bin`.
+fn cmd_dump(
+    pac_path: &PathBuf,
+    out_dir: &PathBuf,
+    port: Option<String>,
+    enter_download: bool,
+) -> Result<()> {
+    let file = File::open(pac_path).with_context(|| format!("opening {}", pac_path.display()))?;
+    let mmap =
+        unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", pac_path.display()))?;
+    let info = pac::parse(&mmap, false).context("parsing PAC")?;
+    let flashplan = plan::build(&info).map_err(|e| anyhow::anyhow!("building plan: {e}"))?;
+    let parts: Vec<(String, u32, u32)> = flashplan
+        .partitions
+        .iter()
+        .map(|e| (e.file_id.clone(), e.address, e.size))
+        .collect();
+    if parts.is_empty() {
+        bail!("no partitions in {}", pac_path.display());
+    }
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+
+    let dl = resolve_download_port(port, enter_download)?;
+    println!("Download port: {dl}");
+    let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
+
+    let regions: Vec<(u32, u32)> = parts.iter().map(|(_, a, s)| (*a, *s)).collect();
+    let mut state: (String, i64) = (String::new(), -1);
+    let mut progress = |stage: &str, done: u64, total: u64| {
+        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
+        if stage != state.0 {
+            if !state.0.is_empty() {
+                println!();
+            }
+            state = (stage.to_string(), -1);
+        }
+        if pct != state.1 {
+            state.1 = pct;
+            print!("\r  {stage:<14} {pct:3}%");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    };
+    let dumps = Flasher::new(FlashOptions::default())
+        .dump(&mut serial, &info, &mmap, &regions, &mut progress)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!();
+
+    for ((name, _, declared), data) in parts.iter().zip(&dumps) {
+        let path = out_dir.join(format!("{name}.bin"));
+        std::fs::write(&path, data).with_context(|| format!("writing {}", path.display()))?;
+        let note = if data.len() as u32 == *declared {
+            ""
+        } else {
+            " (short read)"
+        };
+        println!(
+            "  {name:<12} {} bytes{note} -> {}",
+            data.len(),
+            path.display()
+        );
+    }
+    println!(
+        "Dumped {} partition(s) to {}",
+        dumps.len(),
+        out_dir.display()
+    );
+    Ok(())
 }
 
 /// Reboot a device out of FDL2/download mode with a BSL `NORMAL_RESET`.

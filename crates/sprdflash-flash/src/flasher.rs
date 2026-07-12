@@ -88,82 +88,14 @@ impl Flasher {
     ) -> Result<FlashOutcome, FlashError> {
         let start = Instant::now();
         let mut phases: Vec<(String, f64)> = Vec::new();
-        let mut mark = start;
         let plan = plan::build(info).map_err(FlashError::Plan)?;
         let mut written = 0u64;
 
-        let fdl1 = plan
-            .fdl1
-            .payload(pac)
-            .ok_or_else(|| FlashError::Payload(plan.fdl1.file_id.clone()))?;
-
-        // ---- Phase 1: PDL loads + execs FDL1 -------------------------------
-        let version;
-        {
-            let mut pdl = PdlIo::new(port, self.opts.timeout);
-            tracing::info!("PDL connect");
-            pdl.connect()?;
-            tracing::info!(
-                "PDL load FDL1 ({} bytes @ {:#x})",
-                fdl1.len(),
-                plan.fdl1.address
-            );
-            pdl.send_image(plan.fdl1.address, fdl1, |d, t| progress("FDL1", d, t))?;
-            let raw = pdl.exec_and_get_ver(self.opts.exec_timeout)?;
-            // strip 0x7e flags, unescape, parse the VER frame
-            let body = bsl::unescape(&raw[1..raw.len().saturating_sub(1)]);
-            let (t, vdata) = bsl::parse_message(&body).map_err(|_| FlashError::Version)?;
-            if t != bsl::rep::VER {
-                return Err(FlashError::Version);
-            }
-            version = String::from_utf8_lossy(vdata).trim().to_string();
-            tracing::info!("FDL1 running: {version}");
-        }
-        phases.push(("fdl1".into(), mark.elapsed().as_secs_f64()));
-        mark = Instant::now();
-
-        // ---- Phase 2: BSL loads FDL2, then writes partitions ---------------
-        let mut bsl = BslIo::new(port, self.opts.timeout);
-        bsl.connect()?;
-
-        if let Some(fdl2e) = plan.fdl2 {
-            let fdl2 = fdl2e
-                .payload(pac)
-                .ok_or_else(|| FlashError::Payload(fdl2e.file_id.clone()))?;
-            tracing::info!(
-                "BSL load FDL2 ({} bytes @ {:#x})",
-                fdl2.len(),
-                fdl2e.address
-            );
-            bsl.send_stage(fdl2e.address, fdl2, FDL_LOAD_CHUNK, |d, t| {
-                progress("FDL2", d, t)
-            })?;
-            bsl.command(
-                bsl::cmd::EXEC_DATA,
-                &[],
-                bsl::rep::ACK,
-                self.opts.exec_timeout,
-                "EXEC FDL2",
-            )?;
-            bsl.connect()?; // re-handshake under FDL2
-        }
-
-        // ---- Speed lever: CHANGE_BAUD (measured, off by default) -----------
-        if let Some(baud) = self.opts.baud {
-            tracing::info!("CHANGE_BAUD -> {baud}");
-            bsl.command(
-                bsl::cmd::CHANGE_BAUD,
-                &baud.to_be_bytes(),
-                bsl::rep::ACK,
-                self.opts.timeout,
-                "CHANGE_BAUD",
-            )?;
-            bsl.port().set_baud(baud).map_err(BslError::from)?;
-            bsl.connect()?;
-        }
-
-        phases.push(("fdl2".into(), mark.elapsed().as_secs_f64()));
-        mark = Instant::now();
+        // ---- Phases 1-2: PDL → FDL1 → BSL → FDL2 (shared with `dump`) -------
+        let (mut bsl, version, fdl1_secs, fdl2_secs) = self.bring_up(port, pac, &plan, progress)?;
+        phases.push(("fdl1".into(), fdl1_secs));
+        phases.push(("fdl2".into(), fdl2_secs));
+        let mut mark = Instant::now();
 
         // ---- Partitions ----------------------------------------------------
         for e in &plan.partitions {
@@ -246,6 +178,121 @@ impl Flasher {
             seconds: start.elapsed().as_secs_f64(),
             phases,
         })
+    }
+
+    /// Read `regions` (address, length) back from the device **without writing
+    /// anything**: bring up FDL2, `READ_FLASH` each region, then reset. Returns
+    /// one byte-vector per region, in order. Needs a `pac` only for this device's
+    /// FDL1/FDL2 stages — the partition payloads are ignored.
+    pub fn dump(
+        &self,
+        port: &mut dyn Transport,
+        info: &PacInfo,
+        pac: &[u8],
+        regions: &[(u32, u32)],
+        progress: Progress,
+    ) -> Result<Vec<Vec<u8>>, FlashError> {
+        let plan = plan::build(info).map_err(FlashError::Plan)?;
+        let (mut bsl, version, _f1, _f2) = self.bring_up(port, pac, &plan, progress)?;
+        tracing::info!("dumping via {version}");
+        let mut out = Vec::with_capacity(regions.len());
+        for (addr, len) in regions {
+            tracing::info!("read {addr:#x} ({len} bytes)");
+            let data = bsl.read_flash(*addr, *len as usize, READBACK_CHUNK)?;
+            progress("read", data.len() as u64, u64::from(*len));
+            out.push(data);
+        }
+        if self.opts.reset {
+            bsl.send(bsl::cmd::NORMAL_RESET, &[])?;
+            bsl.port().reset_teardown(self.opts.reset_hold);
+        }
+        Ok(out)
+    }
+
+    /// Bring the device up to a connected FDL2 (PDL → FDL1 → BSL → FDL2 →
+    /// optional `CHANGE_BAUD`). Returns the live BSL session, the FDL1 version
+    /// banner, and the `(fdl1, fdl2)` phase durations. Shared by [`Self::run`]
+    /// and [`Self::dump`].
+    fn bring_up<'p>(
+        &self,
+        port: &'p mut dyn Transport,
+        pac: &[u8],
+        plan: &plan::FlashPlan<'_>,
+        progress: Progress,
+    ) -> Result<(BslIo<'p>, String, f64, f64), FlashError> {
+        let fdl1 = plan
+            .fdl1
+            .payload(pac)
+            .ok_or_else(|| FlashError::Payload(plan.fdl1.file_id.clone()))?;
+
+        // ---- Phase 1: PDL loads + execs FDL1 -------------------------------
+        let mut mark = Instant::now();
+        let version;
+        {
+            let mut pdl = PdlIo::new(port, self.opts.timeout);
+            tracing::info!("PDL connect");
+            pdl.connect()?;
+            tracing::info!(
+                "PDL load FDL1 ({} bytes @ {:#x})",
+                fdl1.len(),
+                plan.fdl1.address
+            );
+            pdl.send_image(plan.fdl1.address, fdl1, |d, t| progress("FDL1", d, t))?;
+            let raw = pdl.exec_and_get_ver(self.opts.exec_timeout)?;
+            // strip 0x7e flags, unescape, parse the VER frame
+            let body = bsl::unescape(&raw[1..raw.len().saturating_sub(1)]);
+            let (t, vdata) = bsl::parse_message(&body).map_err(|_| FlashError::Version)?;
+            if t != bsl::rep::VER {
+                return Err(FlashError::Version);
+            }
+            version = String::from_utf8_lossy(vdata).trim().to_string();
+            tracing::info!("FDL1 running: {version}");
+        }
+        let fdl1_secs = mark.elapsed().as_secs_f64();
+        mark = Instant::now();
+
+        // ---- Phase 2: BSL loads + execs FDL2 -------------------------------
+        let mut bsl = BslIo::new(port, self.opts.timeout);
+        bsl.connect()?;
+
+        if let Some(fdl2e) = plan.fdl2 {
+            let fdl2 = fdl2e
+                .payload(pac)
+                .ok_or_else(|| FlashError::Payload(fdl2e.file_id.clone()))?;
+            tracing::info!(
+                "BSL load FDL2 ({} bytes @ {:#x})",
+                fdl2.len(),
+                fdl2e.address
+            );
+            bsl.send_stage(fdl2e.address, fdl2, FDL_LOAD_CHUNK, |d, t| {
+                progress("FDL2", d, t)
+            })?;
+            bsl.command(
+                bsl::cmd::EXEC_DATA,
+                &[],
+                bsl::rep::ACK,
+                self.opts.exec_timeout,
+                "EXEC FDL2",
+            )?;
+            bsl.connect()?; // re-handshake under FDL2
+        }
+
+        // ---- Speed lever: CHANGE_BAUD (measured, off by default) -----------
+        if let Some(baud) = self.opts.baud {
+            tracing::info!("CHANGE_BAUD -> {baud}");
+            bsl.command(
+                bsl::cmd::CHANGE_BAUD,
+                &baud.to_be_bytes(),
+                bsl::rep::ACK,
+                self.opts.timeout,
+                "CHANGE_BAUD",
+            )?;
+            bsl.port().set_baud(baud).map_err(BslError::from)?;
+            bsl.connect()?;
+        }
+        let fdl2_secs = mark.elapsed().as_secs_f64();
+
+        Ok((bsl, version, fdl1_secs, fdl2_secs))
     }
 
     /// Write a staged image with an adaptive chunk: on a response timeout (the

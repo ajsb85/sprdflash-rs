@@ -79,6 +79,17 @@ impl MockTransport {
         }
     }
 
+    /// A mock pre-seeded with persistent flash contents (keyed by base address),
+    /// so `dump`/READ_FLASH serves them back without a prior write this session.
+    #[must_use]
+    pub fn seeded(regions: &[(u32, Vec<u8>)]) -> Self {
+        let mut m = Self::default();
+        for (addr, bytes) in regions {
+            m.flash.insert(*addr, bytes.clone());
+        }
+        m
+    }
+
     fn process(&mut self) {
         loop {
             match self.mode {

@@ -148,6 +148,22 @@ fn read_back_verify_passes_on_a_good_flash() {
 }
 
 #[test]
+fn dump_reads_partitions_off_the_device() {
+    let pac = build_pac();
+    let info = pac::parse(&pac, true).expect("valid PAC");
+    // Seed the device's "flash" at the AP partition address, then dump it back
+    // without any prior write this session (models extracting an existing image).
+    let ap: Vec<u8> = (0..32u8).collect();
+    let mut mock = MockTransport::seeded(&[(0x6001_0000, ap.clone())]);
+    let mut noop = |_: &str, _: u64, _: u64| {};
+    let dumps = Flasher::new(FlashOptions::default())
+        .dump(&mut mock, &info, &pac, &[(0x6001_0000, 32)], &mut noop)
+        .expect("dump succeeds");
+    assert_eq!(dumps.len(), 1);
+    assert_eq!(dumps[0], ap, "dump returns the persistent flash bytes");
+}
+
+#[test]
 fn read_back_verify_catches_corruption() {
     use sprdflash_flash::FlashError;
     let pac = build_pac();
