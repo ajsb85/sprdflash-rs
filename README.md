@@ -109,10 +109,14 @@ sprdflash clone --enter-download --pac firmware.pac --out golden.pac
 `dump` reads each partition straight off the flash with `READ_FLASH` and writes
 one `<file_id>.bin` per partition — no writes to the device. The PAC supplies the
 FDL stages and the partition layout; the dumped bytes are byte-identical
-(verified by SHA-256 on an Air724UG) to what was flashed. `clone` goes one step
-further: it splices the dumped partitions into a copy of the reference PAC and
-refreshes the CRCs, producing a **flashable golden `.pac`** that captures a
-configured reference unit — verified byte-identical round-trip on hardware.
+(verified by SHA-256 on an Air724UG) to what was flashed. Pass `--region
+ADDR:SIZE` (repeatable) to read arbitrary flash ranges instead of the PAC's
+partitions. **Any RDA8910 PAC works for the FDL stages** — they're interchangeable
+across firmware versions for the same chip (hardware-verified), so you don't need
+the device's exact firmware to extract it. `clone` goes one step further: it
+splices the dumped partitions into a copy of the reference PAC and refreshes the
+CRCs, producing a **flashable golden `.pac`** that captures a configured reference
+unit — verified byte-identical round-trip on hardware.
 
 Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (WSL Ubuntu).
 

@@ -59,12 +59,18 @@ enum Command {
     /// The .pac supplies this device's FDL1/FDL2 stages and the partition layout
     /// (addresses + sizes); its partition payloads are not used.
     Dump {
-        /// PAC providing the FDL stages and partition layout for this device.
+        /// PAC providing the FDL stages (and, without --region, the partition
+        /// layout). Any PAC for this chip works for the FDLs.
         #[arg(long)]
         pac: PathBuf,
-        /// Output directory; one <file_id>.bin per partition is written here.
+        /// Output directory; one <file_id>.bin (or region_<addr>.bin) is written here.
         #[arg(long)]
         out: PathBuf,
+        /// Explicit region(s) to read as ADDR:SIZE (hex `0x..` or decimal),
+        /// repeatable. If given, overrides the PAC's partition layout — the PAC
+        /// is then used only for the FDL stages.
+        #[arg(long = "region")]
+        regions: Vec<String>,
         /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
         #[arg(long)]
         port: Option<String>,
@@ -179,9 +185,10 @@ fn main() -> Result<()> {
         Command::Dump {
             pac,
             out,
+            regions,
             port,
             enter_download,
-        } => cmd_dump(&pac, &out, port, enter_download),
+        } => cmd_dump(&pac, &out, &regions, port, enter_download),
         Command::Clone {
             pac,
             out,
@@ -625,10 +632,27 @@ fn cmd_clone(
     Ok(())
 }
 
-/// Read the device's partitions back off flash into `<out>/<file_id>.bin`.
+/// Parse an `ADDR:SIZE` region spec (each hex `0x..` or decimal) into `(u32, u32)`.
+fn parse_region(s: &str) -> Result<(u32, u32)> {
+    let (a, b) = s
+        .split_once(':')
+        .with_context(|| format!("region '{s}' must be ADDR:SIZE"))?;
+    let num = |x: &str| -> Result<u32> {
+        let x = x.trim();
+        match x.strip_prefix("0x").or_else(|| x.strip_prefix("0X")) {
+            Some(hex) => u32::from_str_radix(hex, 16),
+            None => x.parse(),
+        }
+        .with_context(|| format!("bad number '{x}' in region '{s}'"))
+    };
+    Ok((num(a)?, num(b)?))
+}
+
+/// Read the device's partitions (or explicit `--region`s) off flash into files.
 fn cmd_dump(
     pac_path: &PathBuf,
     out_dir: &PathBuf,
+    region_specs: &[String],
     port: Option<String>,
     enter_download: bool,
 ) -> Result<()> {
@@ -636,22 +660,35 @@ fn cmd_dump(
     let mmap =
         unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", pac_path.display()))?;
     let info = pac::parse(&mmap, false).context("parsing PAC")?;
-    let flashplan = plan::build(&info).map_err(|e| anyhow::anyhow!("building plan: {e}"))?;
-    let parts: Vec<(String, u32, u32)> = flashplan
-        .partitions
-        .iter()
-        .map(|e| (e.file_id.clone(), e.address, e.size))
-        .collect();
-    if parts.is_empty() {
-        bail!("no partitions in {}", pac_path.display());
-    }
+
+    // (name, address, size): explicit --region overrides the PAC's partitions.
+    let targets: Vec<(String, u32, u32)> = if region_specs.is_empty() {
+        let flashplan = plan::build(&info).map_err(|e| anyhow::anyhow!("building plan: {e}"))?;
+        let parts: Vec<(String, u32, u32)> = flashplan
+            .partitions
+            .iter()
+            .map(|e| (e.file_id.clone(), e.address, e.size))
+            .collect();
+        if parts.is_empty() {
+            bail!("no partitions in {}", pac_path.display());
+        }
+        parts
+    } else {
+        region_specs
+            .iter()
+            .map(|s| {
+                let (addr, size) = parse_region(s)?;
+                Ok((format!("region_{addr:#010x}"), addr, size))
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
 
     let dl = resolve_download_port(port, enter_download)?;
     println!("Download port: {dl}");
     let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
 
-    let regions: Vec<(u32, u32)> = parts.iter().map(|(_, a, s)| (*a, *s)).collect();
+    let regions: Vec<(u32, u32)> = targets.iter().map(|(_, a, s)| (*a, *s)).collect();
     let mut state: (String, i64) = (String::new(), -1);
     let mut progress = |stage: &str, done: u64, total: u64| {
         let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
@@ -663,7 +700,7 @@ fn cmd_dump(
         }
         if pct != state.1 {
             state.1 = pct;
-            print!("\r  {stage:<14} {pct:3}%");
+            print!("\r  {stage:<16} {pct:3}%");
             use std::io::Write;
             let _ = std::io::stdout().flush();
         }
@@ -673,7 +710,7 @@ fn cmd_dump(
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!();
 
-    for ((name, _, declared), data) in parts.iter().zip(&dumps) {
+    for ((name, _, declared), data) in targets.iter().zip(&dumps) {
         let path = out_dir.join(format!("{name}.bin"));
         std::fs::write(&path, data).with_context(|| format!("writing {}", path.display()))?;
         let note = if data.len() as u32 == *declared {
@@ -682,16 +719,12 @@ fn cmd_dump(
             " (short read)"
         };
         println!(
-            "  {name:<12} {} bytes{note} -> {}",
+            "  {name:<18} {} bytes{note} -> {}",
             data.len(),
             path.display()
         );
     }
-    println!(
-        "Dumped {} partition(s) to {}",
-        dumps.len(),
-        out_dir.display()
-    );
+    println!("Dumped {} region(s) to {}", dumps.len(), out_dir.display());
     Ok(())
 }
 
@@ -814,5 +847,30 @@ fn describe(t: &serialport::SerialPortType) -> String {
         serialport::SerialPortType::BluetoothPort => "Bluetooth".into(),
         serialport::SerialPortType::PciPort => "PCI".into(),
         serialport::SerialPortType::Unknown => "Unknown".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_region;
+
+    #[test]
+    fn parses_hex_and_decimal_regions() {
+        assert_eq!(
+            parse_region("0x60000000:42112").unwrap(),
+            (0x6000_0000, 42112)
+        );
+        assert_eq!(
+            parse_region("1610612736:1024").unwrap(),
+            (1_610_612_736, 1024)
+        );
+        assert_eq!(parse_region(" 0x10 : 0x20 ").unwrap(), (0x10, 0x20));
+    }
+
+    #[test]
+    fn rejects_malformed_regions() {
+        assert!(parse_region("0x60000000").is_err()); // no size
+        assert!(parse_region("nope:123").is_err()); // bad address
+        assert!(parse_region("0x10:xyz").is_err()); // bad size
     }
 }
