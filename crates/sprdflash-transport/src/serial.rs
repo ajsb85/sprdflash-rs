@@ -65,6 +65,7 @@ pub fn read_until<R>(
     if let Some(v) = pred(acc) {
         return Ok(v);
     }
+    let start = Instant::now();
     let mut tmp = [0u8; 4096];
     while Instant::now() < deadline {
         let n = port.read_some(&mut tmp)?;
@@ -75,9 +76,9 @@ pub fn read_until<R>(
             }
         }
     }
-    Err(TransportError::Timeout(
-        deadline.saturating_duration_since(Instant::now()),
-    ))
+    // Report how long we actually waited, not the (always ~0) time left on the
+    // deadline — the latter made every timeout read "after 0ns".
+    Err(TransportError::Timeout(start.elapsed()))
 }
 
 /// A robust serial byte stream for the download protocol.

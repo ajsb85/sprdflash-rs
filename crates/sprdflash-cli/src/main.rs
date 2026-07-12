@@ -372,10 +372,6 @@ fn cmd_flash(a: FlashArgs) -> Result<()> {
     }
     println!("Flashing {} ({} bytes)", info.product_name, info.size);
 
-    let port = resolve_download_port(a.port, a.enter_download)?;
-    println!("Download port: {port}");
-    let mut serial = Serial::open(&port, 115_200).context("opening download port")?;
-
     let opts = FlashOptions {
         format: a.format,
         chunk: a.chunk,
@@ -386,26 +382,7 @@ fn cmd_flash(a: FlashArgs) -> Result<()> {
         ..Default::default()
     };
 
-    let mut state: (String, i64) = (String::new(), -1);
-    let mut progress = |stage: &str, done: u64, total: u64| {
-        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
-        if stage != state.0 {
-            if !state.0.is_empty() {
-                println!();
-            }
-            state = (stage.to_string(), -1);
-        }
-        if pct != state.1 {
-            state.1 = pct;
-            print!("\r  {stage:<14} {pct:3}%");
-            use std::io::Write;
-            let _ = std::io::stdout().flush();
-        }
-    };
-
-    let outcome = Flasher::new(opts)
-        .run(&mut serial, &info, &mmap, &mut progress)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let outcome = flash_with_recovery(&opts, a.port, a.enter_download, &info, &mmap)?;
     println!();
     let mib = outcome.bytes_written as f64 / (1024.0 * 1024.0);
     println!(
@@ -428,6 +405,83 @@ fn cmd_flash(a: FlashArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Resolve the port, open it, and flash — with one automatic reset-and-retry if
+/// the PDL handshake fails. That is the signature of a module left in FDL2 by a
+/// prior aborted flash; a `NORMAL_RESET` reboots it back to the boot ROM so the
+/// retry's PDL connect succeeds, without the operator running `reset` by hand.
+fn flash_with_recovery(
+    opts: &FlashOptions,
+    explicit_port: Option<String>,
+    enter_download: bool,
+    info: &pac::PacInfo,
+    mmap: &[u8],
+) -> Result<sprdflash_flash::FlashOutcome> {
+    for attempt in 0u8..2 {
+        let port = resolve_download_port(explicit_port.clone(), enter_download)?;
+        println!("Download port: {port}");
+        let mut serial = Serial::open(&port, 115_200).context("opening download port")?;
+
+        let mut state: (String, i64) = (String::new(), -1);
+        let mut progress = |stage: &str, done: u64, total: u64| {
+            let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
+            if stage != state.0 {
+                if !state.0.is_empty() {
+                    println!();
+                }
+                state = (stage.to_string(), -1);
+            }
+            if pct != state.1 {
+                state.1 = pct;
+                print!("\r  {stage:<14} {pct:3}%");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+            }
+        };
+
+        match Flasher::new(opts.clone()).run(&mut serial, info, mmap, &mut progress) {
+            Ok(outcome) => return Ok(outcome),
+            Err(sprdflash_flash::FlashError::Pdl(e)) if attempt == 0 => {
+                println!();
+                eprintln!(
+                    "PDL handshake failed ({e}); the module may be stuck in FDL2 from a prior \
+                     aborted flash — sending reset and retrying once"
+                );
+                send_normal_reset(&mut serial);
+                drop(serial);
+                // Wait for the module to re-enumerate: back in download (an
+                // unbootable image) or booted to normal mode.
+                let mut booted = false;
+                for _ in 0..40 {
+                    if discovery::find_download_port().is_some() {
+                        break;
+                    }
+                    if !discovery::find_module_ports().is_empty() {
+                        booted = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                // A port appearing mid-boot is not yet ready for AT*DOWNLOAD;
+                // let the firmware finish coming up before the retry switches it.
+                if booted {
+                    std::thread::sleep(Duration::from_secs(10));
+                }
+            }
+            Err(e) => return Err(anyhow::anyhow!("{e}")),
+        }
+    }
+    unreachable!("the retry loop returns within two attempts")
+}
+
+/// Send a BSL `NORMAL_RESET` to reboot a module out of FDL2/download mode.
+fn send_normal_reset(serial: &mut Serial) {
+    use sprdflash_core::bsl::{self, Checksum};
+    use sprdflash_transport::Transport;
+    let msg = bsl::build_message(bsl::cmd::NORMAL_RESET, &[], Checksum::Sprd);
+    let _ = serial.write_all(&msg);
+    serial.reset_teardown(Duration::from_millis(1000));
 }
 
 /// Resolve the download-mode port, optionally switching the module first.
@@ -530,9 +584,6 @@ fn cmd_dump(
 
 /// Reboot a device out of FDL2/download mode with a BSL `NORMAL_RESET`.
 fn cmd_reset(port: Option<String>) -> Result<()> {
-    use sprdflash_core::bsl::{self, Checksum};
-    use sprdflash_transport::Transport;
-
     let name = match port {
         Some(p) => p,
         None => discovery::find_download_port()
@@ -540,9 +591,7 @@ fn cmd_reset(port: Option<String>) -> Result<()> {
             .context("no download port (0525:a4a7) found; pass --port")?,
     };
     let mut serial = Serial::open(&name, 115_200).context("opening download port")?;
-    let msg = bsl::build_message(bsl::cmd::NORMAL_RESET, &[], Checksum::Sprd);
-    serial.write_all(&msg).context("sending NORMAL_RESET")?;
-    serial.reset_teardown(std::time::Duration::from_millis(1000));
+    send_normal_reset(&mut serial);
     println!("Sent NORMAL_RESET to {name}; the module should reboot into its firmware.");
     Ok(())
 }
