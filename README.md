@@ -60,7 +60,7 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
 | crate                | status | role                                                          |
 |----------------------|--------|---------------------------------------------------------------|
 | `sprdflash-core`     | ✅ done | sans-I/O protocol: PAC parse, PDL + BSL framing, checksums, plan |
-| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line`, `reset` | the `sprdflash` binary |
+| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line`, `reset`, `dump` | the `sprdflash` binary |
 | `sprdflash-transport`| ✅ done | `Transport` trait over `serialport`, port discovery, beacon-window connect, recovery |
 | `sprdflash-flash`    | ✅ done | device driver: PDL→BSL→partitions→format→reset, `CHANGE_BAUD`, read-back verify, `MockTransport` |
 | `sprdflash-line`     | ✅ done | parallel stations, boot-verify (ATI/IMEI), JSON-lines records, metrics, continuous mode |
@@ -99,7 +99,15 @@ sprdflash flash --enter-download --format --verify-readback firmware.pac
 sprdflash info firmware.pac
 sprdflash list-ports
 sprdflash reset       # reboot a device stuck in FDL2 after an aborted flash
+
+# extract every partition off a device (read-only) — byte-exact backup/clone
+sprdflash dump --enter-download --pac firmware.pac --out ./dump
 ```
+
+`dump` reads each partition straight off the flash with `READ_FLASH` and writes
+one `<file_id>.bin` per partition — no writes to the device. The PAC supplies the
+FDL stages and the partition layout; the dumped bytes are byte-identical
+(verified by SHA-256 on an Air724UG) to what was flashed.
 
 Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (WSL Ubuntu).
 
