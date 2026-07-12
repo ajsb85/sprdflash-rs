@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -11,9 +11,9 @@ repository = "https://github.com/ajsb85/sprdflash-rs"
 authors = ["ajsb85"]
 
 [workspace.dependencies]
-sprdflash-core = { path = "crates/sprdflash-core", version = "0.6.0" }
-sprdflash-transport = { path = "crates/sprdflash-transport", version = "0.6.0" }
-sprdflash-flash = { path = "crates/sprdflash-flash", version = "0.6.0" }
+sprdflash-core = { path = "crates/sprdflash-core", version = "0.7.0" }
+sprdflash-transport = { path = "crates/sprdflash-transport", version = "0.7.0" }
+sprdflash-flash = { path = "crates/sprdflash-flash", version = "0.7.0" }
 thiserror = "2"
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
