@@ -67,11 +67,18 @@ All computed from `flash_record` (see
   lists every firmware and timestamp it ran — the audit trail regulated
   industries require.
 
-## 5. Roadmap
+## 5. Delivered
 
-- **Phase timings** (`phase_timing`): per-phase seconds (FDL/partitions/format/
-  verify) for finer line balancing.
-- **Prometheus exporter**: live `units_total{result=}`, `flash_seconds` histogram,
-  `station_up` for Grafana alongside the batch KPIs.
-- **Operator / work-order stamping**: pass `--work-order` / `--operator` to embed
-  ERP context directly in each record.
+- ✅ **Phase timings** (`phases[]` in each record): per-phase seconds — `fdl1`,
+  `fdl2`, `partitions`, `format`, `verify` — for line balancing
+  (`v_event_phase_avg`).
+- ✅ **Operator / work-order stamping**: `--work-order` / `--operator` embed the
+  ERP context in every record.
+- ✅ **Reference ingester** (`tools/mes_ingest.py`): loads the JSON lines into the
+  `flash_event` landing zone; the KPI views make yield/throughput/defects
+  queryable with zero ETL.
+
+## Roadmap
+
+- **Prometheus exporter**: live `units_total{result=}`, a `flash_seconds`
+  histogram, and `station_up` for Grafana alongside the batch KPIs.
