@@ -1,4 +1,12 @@
-# sprdflash-rs
+# SPRD Flash Tool
+
+[![CI](https://github.com/ajsb85/sprdflash-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/ajsb85/sprdflash-rs/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Rust 2024](https://img.shields.io/badge/rust-2024_edition-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
+[![MSRV 1.85](https://img.shields.io/badge/MSRV-1.85-blue.svg)](https://blog.rust-lang.org/)
+[![Platforms](https://img.shields.io/badge/platforms-Windows_%7C_Linux-informational.svg)](#build--test)
+[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
+[![unsafe: forbidden in core](https://img.shields.io/badge/unsafe-forbidden_in_core-success.svg)](crates/sprdflash-core)
 
 Pure-Rust, cross-platform (Windows 11 + Linux/WSL) flasher for SPRD/UNISOC
 `.pac` firmware — RDA8910 / UIS8910 (Air724UG and friends). Built for a

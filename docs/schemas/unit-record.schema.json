@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ajsb85/sprdflash-rs/docs/schemas/unit-record.schema.json",
+  "title": "SPRD Flash Tool — Unit Record",
+  "description": "One JSON object per flashed unit, emitted (JSON Lines) to the file given by `sprdflash line --records`. The atomic event ingested by the MES/ERP.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ts_ms",
+    "station",
+    "port",
+    "product",
+    "pac",
+    "result",
+    "attempts",
+    "bytes",
+    "flash_seconds",
+    "total_seconds",
+    "firmware",
+    "imei",
+    "error"
+  ],
+  "properties": {
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unit start time, Unix epoch milliseconds."
+    },
+    "station": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Station/fixture label the unit ran on."
+    },
+    "port": {
+      "type": "string",
+      "description": "Download-mode port used (diagnostic; not a stable key)."
+    },
+    "product": {
+      "type": "string",
+      "description": "Product name from the PAC header (e.g. UIX8910_MODEM)."
+    },
+    "pac": {
+      "type": "string",
+      "description": "PAC file name that was flashed."
+    },
+    "result": {
+      "type": "string",
+      "enum": ["pass", "fail"],
+      "description": "Outcome: pass = flashed and verified booting the expected build."
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Attempts taken (1 = first-pass yield)."
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Payload bytes written (partitions + markers)."
+    },
+    "flash_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Pure flash transfer wall-clock, seconds."
+    },
+    "total_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Full unit wall-clock (flash + verify + recovery), seconds."
+    },
+    "firmware": {
+      "type": ["string", "null"],
+      "description": "ATI banner read back from the booted unit; null if not verified/failed."
+    },
+    "imei": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{14,16}$",
+      "description": "IMEI read back (AT+CGSN); null if the unit did not boot."
+    },
+    "error": {
+      "type": ["string", "null"],
+      "description": "Failure reason; null on pass."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "result": { "const": "pass" } } },
+      "then": { "properties": { "error": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "result": { "const": "fail" } } },
+      "then": { "properties": { "error": { "type": "string" } } }
+    }
+  ],
+  "examples": [
+    {
+      "ts_ms": 1783821948614,
+      "station": "station-1",
+      "port": "COM34",
+      "product": "UIX8910_MODEM",
+      "pac": "LuatOS-Air_V4035_RDA8910_TTS_NOVOLTE_FLOAT.pac",
+      "result": "pass",
+      "attempts": 1,
+      "bytes": 6201746,
+      "flash_seconds": 33.744,
+      "total_seconds": 39.18,
+      "firmware": "LuatOS-Air_V4035_RDA8910_TTS_NOVOLTE_FLOAT",
+      "imei": "863488050987562",
+      "error": null
+    }
+  ]
+}
