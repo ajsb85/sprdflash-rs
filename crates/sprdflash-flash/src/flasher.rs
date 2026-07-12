@@ -21,6 +21,11 @@ pub type Progress<'a> = &'a mut dyn FnMut(&str, u64, u64);
 /// only for partition/NV writes under FDL2 (which has a much bigger buffer).
 const FDL_LOAD_CHUNK: usize = 2048;
 
+/// Floor for the adaptive chunk back-off. 512 B is proven reliable over the
+/// generic `cdc_acm` driver behind usbipd, where larger frames stall at the tail
+/// of a big transfer.
+const MIN_ADAPTIVE_CHUNK: usize = 512;
+
 /// A flash failure.
 #[derive(Debug, thiserror::Error)]
 pub enum FlashError {
@@ -156,7 +161,7 @@ impl Flasher {
                 e.address
             );
             let fid = e.file_id.as_str();
-            bsl.send_stage(e.address, data, self.opts.chunk, |d, t| progress(fid, d, t))?;
+            self.send_stage_adaptive(&mut bsl, e.address, data, fid, progress)?;
             written += data.len() as u64;
         }
 
@@ -189,7 +194,7 @@ impl Flasher {
                         e.address
                     );
                     let fid = e.file_id.as_str();
-                    bsl.send_stage(e.address, data, self.opts.chunk, |d, t| progress(fid, d, t))?;
+                    self.send_stage_adaptive(&mut bsl, e.address, data, fid, progress)?;
                     written += data.len() as u64;
                 }
             }
@@ -209,8 +214,38 @@ impl Flasher {
         })
     }
 
-    /// Write the NV region: refresh its CRC-16-ARC, then a sum32-checked START,
-    /// MIDST chunks, and END.
+    /// Write a staged image with an adaptive chunk: on a response timeout (the
+    /// `cdc_acm`/usbipd tail-stall), re-`CONNECT` to reset the FDL2 write session
+    /// and retry the whole stage at half the chunk, down to [`MIN_ADAPTIVE_CHUNK`].
+    /// `START_DATA` re-initialises the write pointer, so re-sending is safe.
+    fn send_stage_adaptive(
+        &self,
+        bsl: &mut BslIo,
+        addr: u32,
+        data: &[u8],
+        label: &str,
+        progress: Progress,
+    ) -> Result<(), FlashError> {
+        let mut chunk = self.opts.chunk.max(1);
+        loop {
+            match bsl.send_stage(addr, data, chunk, |d, t| progress(label, d, t)) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.is_timeout() && chunk > MIN_ADAPTIVE_CHUNK => {
+                    let next = (chunk / 2).max(MIN_ADAPTIVE_CHUNK);
+                    tracing::warn!(
+                        "{label}: response timeout at chunk {chunk}; re-connect and retry at {next}"
+                    );
+                    chunk = next;
+                    bsl.port().purge_input();
+                    bsl.connect()?; // reset the FDL2 session before restarting the stage
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Write the NV region (CRC-16-ARC refreshed, sum32-checked START), with the
+    /// same adaptive-chunk retry as [`Self::send_stage_adaptive`].
     fn write_nv(
         &self,
         bsl: &mut BslIo,
@@ -219,7 +254,33 @@ impl Flasher {
         progress: Progress,
     ) -> Result<u64, FlashError> {
         let fixed = plan::nv_fix_crc(data);
-        let start = plan::nv_start_payload(addr, &fixed);
+        let mut chunk = self.opts.chunk.max(1);
+        loop {
+            match self.write_nv_once(bsl, addr, &fixed, chunk, progress) {
+                Ok(n) => return Ok(n),
+                Err(e) if e.is_timeout() && chunk > MIN_ADAPTIVE_CHUNK => {
+                    let next = (chunk / 2).max(MIN_ADAPTIVE_CHUNK);
+                    tracing::warn!(
+                        "NV: response timeout at chunk {chunk}; re-connect and retry at {next}"
+                    );
+                    chunk = next;
+                    bsl.port().purge_input();
+                    bsl.connect()?;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    fn write_nv_once(
+        &self,
+        bsl: &mut BslIo,
+        addr: u32,
+        fixed: &[u8],
+        chunk: usize,
+        progress: Progress,
+    ) -> Result<u64, BslError> {
+        let start = plan::nv_start_payload(addr, fixed);
         bsl.command(
             bsl::cmd::START_DATA,
             &start,
@@ -229,7 +290,7 @@ impl Flasher {
         )?;
         let total = fixed.len() as u64;
         let mut sent = 0u64;
-        for piece in fixed.chunks(self.opts.chunk.max(1)) {
+        for piece in fixed.chunks(chunk.max(1)) {
             bsl.command(
                 bsl::cmd::MIDST_DATA,
                 piece,
@@ -240,7 +301,7 @@ impl Flasher {
             sent += piece.len() as u64;
             progress("NV", sent, total);
         }
-        // With the refreshed CRC this now ACKs (historically OPERATION_FAILED).
+        // With the refreshed CRC this ACKs (historically OPERATION_FAILED).
         bsl.command(
             bsl::cmd::END_DATA,
             &[],

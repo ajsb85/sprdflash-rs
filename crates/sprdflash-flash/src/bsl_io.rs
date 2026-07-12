@@ -29,6 +29,15 @@ pub enum BslError {
     },
 }
 
+impl BslError {
+    /// True if this is a response timeout — worth retrying the stage at a smaller
+    /// chunk (the tail-stall the generic `cdc_acm` driver hits over usbipd).
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, BslError::Transport(TransportError::Timeout(_)))
+    }
+}
+
 /// BSL transport bound to a serial port.
 pub struct BslIo<'a> {
     port: &'a mut Serial,
