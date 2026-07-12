@@ -44,7 +44,10 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
   `pnputil` re-enumerate; Linux/WSL `usbip` re-attach / `uhubctl` power-cycle).
 - **Pre-flight PAC CRC** — a corrupt image is never flashed.
 - **Optional post-write read-back verify** (`--verify-readback`): every partition
-  is read back off the device and compared byte-for-byte, failing on any mismatch.
+  is read back off the device with `READ_FLASH` and compared byte-for-byte,
+  failing on any mismatch — hardware-verified on an Air724UG (RDA8910).
+- **In-band recovery** (`sprdflash reset`): reboot a module stuck in FDL2 after an
+  aborted flash, no physical power-cycle.
 - **Per-unit JSON-lines records** for MES, `tracing` spans per station,
   Prometheus metrics (yield, throughput, phase timings).
 - **Post-flash boot verify** (ATI/IMEI on the AT port), append-only audit log.
@@ -57,7 +60,7 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
 | crate                | status | role                                                          |
 |----------------------|--------|---------------------------------------------------------------|
 | `sprdflash-core`     | ✅ done | sans-I/O protocol: PAC parse, PDL + BSL framing, checksums, plan |
-| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line` | the `sprdflash` binary |
+| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash`, `line`, `reset` | the `sprdflash` binary |
 | `sprdflash-transport`| ✅ done | `Transport` trait over `serialport`, port discovery, beacon-window connect, recovery |
 | `sprdflash-flash`    | ✅ done | device driver: PDL→BSL→partitions→format→reset, `CHANGE_BAUD`, read-back verify, `MockTransport` |
 | `sprdflash-line`     | ✅ done | parallel stations, boot-verify (ATI/IMEI), JSON-lines records, metrics, continuous mode |
@@ -84,7 +87,7 @@ from squeezing a single device.
 ## Build & test
 
 ```
-cargo test            # 31 tests: captured ground truth + hardware-free end-to-end
+cargo test            # 35 tests: captured ground truth + hardware-free end-to-end
 cargo build --release
 
 # one device, auto mode-switch, boots into the new firmware
@@ -95,6 +98,7 @@ sprdflash flash --enter-download --format firmware.pac
 sprdflash flash --enter-download --format --verify-readback firmware.pac
 sprdflash info firmware.pac
 sprdflash list-ports
+sprdflash reset       # reboot a device stuck in FDL2 after an aborted flash
 ```
 
 Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (WSL Ubuntu).
@@ -149,12 +153,14 @@ context; `--metrics-addr` serves live Prometheus counters at `/metrics`, and
 Postgres KPI schema (see [docs/](docs/)).
 
 Add `--loop` to run the line **unattended**: each station keeps flashing —
-waiting for the operator to swap in the next unit between cycles — until you
-press Ctrl-C, which stops cleanly after the in-flight units finish. Pair it with
-`--metrics-addr` so a Grafana board watches yield and throughput live all shift.
-Add `--verify-readback` for high-assurance units: after writing each partition,
-its bytes are read back with `READ_FLASH` and compared, failing on any mismatch
-(roughly doubles the flash time, so it is off by default).
+waiting for *its own* fixture's unit to be swapped between cycles (keyed on the
+station's port, so fixtures never cross-trigger) — until you press Ctrl-C, which
+stops cleanly after the in-flight units finish. Pair it with `--metrics-addr` and
+import the ready-made [Grafana dashboard + alert rules](docs/grafana/) so a board
+watches yield and throughput live all shift. Add `--verify-readback` for
+high-assurance units: after writing each partition, its bytes are read back with
+`READ_FLASH` and compared, failing on any mismatch (roughly doubles the flash
+time, so it is off by default).
 
 Each unit is one JSON line for the MES / audit log:
 

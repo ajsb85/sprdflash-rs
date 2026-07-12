@@ -15,6 +15,7 @@ plant's **ERP / MES**.
 | [schemas/unit-record.schema.json](schemas/unit-record.schema.json) | JSON Schema for the per-unit record the tool emits (`--records`) |
 | [schemas/mes-postgres.sql](schemas/mes-postgres.sql) | PostgreSQL schema: normalized warehouse + a `flash_event` landing zone with runnable KPI views |
 | [schemas/sample-units.jsonl](schemas/sample-units.jsonl) | Example JSON-lines output |
+| [grafana/](grafana/) | Importable Grafana dashboard + Prometheus alert rules for the live `--metrics-addr` exporter |
 | [../tools/mes_ingest.py](../tools/mes_ingest.py) | Dependency-free reference ingester (JSON-lines → idempotent UPSERT SQL) |
 
 ## The one thing to know

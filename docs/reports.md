@@ -79,14 +79,15 @@ All computed from `flash_record` (see
   queryable with zero ETL.
 - ✅ **Prometheus exporter** (`--metrics-addr`): live `sprdflash_units_total`
   (by result), `sprdflash_retries_total`, `sprdflash_bytes_total`, and
-  `sprdflash_flash_seconds_total` at `/metrics`, for Grafana alongside the batch
-  KPIs.
+  `sprdflash_flash_seconds_total` at `/metrics`, with a ready-to-import
+  [Grafana dashboard + alert rules](grafana/) alongside the batch KPIs.
 - ✅ **Continuous line mode** (`--loop`): stations flash units in a loop until
   Ctrl-C, so the exporter is live indefinitely and the line runs unattended;
   records stream to the JSONL sink the whole shift.
 - ✅ **Post-write read-back verify** (`--verify-readback`): each partition is read
   back off the device and compared byte-for-byte, so a marginal write is caught
   as a `read-back verify failed for …` defect on the line, not in the field.
+  Hardware-verified on an Air724UG (RDA8910).
 
 ## Roadmap
 
