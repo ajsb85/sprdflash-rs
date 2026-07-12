@@ -16,8 +16,6 @@ pub struct FlashOptions {
     pub chunk: usize,
     /// If set, issue `CHANGE_BAUD` to this rate after FDL2 comes up.
     pub baud: Option<u32>,
-    /// Issue `DISABLE_TRANSCODE` so the bulk data phase skips HDLC escaping.
-    pub disable_transcode: bool,
     /// Send `NORMAL_RESET` when done (so the module boots the new firmware).
     pub reset: bool,
     /// How long to hold the port open after `NORMAL_RESET` before closing.
@@ -34,7 +32,6 @@ impl Default for FlashOptions {
             format: false,
             chunk: 2048,
             baud: None,
-            disable_transcode: false,
             reset: true,
             reset_hold: Duration::from_millis(1000),
             // 5 s absorbs USB jitter (notably usbipd → WSL latency spikes) while
