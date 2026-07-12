@@ -10,7 +10,7 @@ authors.workspace = true
 
 [dependencies]
 sprdflash-core.workspace = true
-sprdflash-transport = { path = "../sprdflash-transport", version = "0.2.0" }
+sprdflash-transport = { path = "../sprdflash-transport", version = "0.3.0" }
 thiserror.workspace = true
 tracing.workspace = true
 
