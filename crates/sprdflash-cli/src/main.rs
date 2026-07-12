@@ -1,16 +1,19 @@
 //! `sprdflash` — native flasher CLI for SPRD/UNISOC `.pac` firmware.
 //!
-//! This turn ships the hardware-independent commands (`info`, `list-ports`);
-//! `flash`/`identify` land with the transport crate.
+//! Commands: `info`, `list-ports`, and `flash` (PDL → BSL → partitions →
+//! optional cross-SDK `--format` → reset), all hardware-verified on RDA8910.
 
 use std::fs::File;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use memmap2::Mmap;
 use sprdflash_core::pac;
 use sprdflash_core::plan::{self, Role};
+use sprdflash_flash::{FlashOptions, Flasher};
+use sprdflash_transport::{discovery, recovery, Serial};
 
 /// BootROM / download-mode USB identity (SPRD download gadget).
 const DOWNLOAD_VID: u16 = 0x0525;
@@ -41,6 +44,32 @@ enum Command {
     },
     /// List serial ports, flagging download-mode and module ports.
     ListPorts,
+    /// Flash a .pac to the module natively (PDL + BSL, no vendor tool).
+    Flash {
+        /// Path to the .pac file.
+        pac: PathBuf,
+        /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
+        #[arg(long)]
+        port: Option<String>,
+        /// Send AT*DOWNLOAD=1 on the module's AT port first (auto mode-switch).
+        #[arg(long)]
+        enter_download: bool,
+        /// Also format the filesystem + refresh NV/prepack (firmware-TYPE change).
+        #[arg(long)]
+        format: bool,
+        /// MIDST chunk size (bytes). Larger = fewer round trips = faster.
+        #[arg(long, default_value_t = 2048)]
+        chunk: usize,
+        /// Issue CHANGE_BAUD to this rate after FDL2 (experimental speed lever).
+        #[arg(long)]
+        baud: Option<u32>,
+        /// Do not reset the module after flashing.
+        #[arg(long)]
+        no_reset: bool,
+        /// Skip the PAC payload CRC check before flashing.
+        #[arg(long)]
+        no_verify: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -54,7 +83,130 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Info { pac, no_verify } => cmd_info(&pac, !no_verify),
         Command::ListPorts => cmd_list_ports(),
+        Command::Flash {
+            pac,
+            port,
+            enter_download,
+            format,
+            chunk,
+            baud,
+            no_reset,
+            no_verify,
+        } => cmd_flash(FlashArgs {
+            pac,
+            port,
+            enter_download,
+            format,
+            chunk,
+            baud,
+            no_reset,
+            verify: !no_verify,
+        }),
     }
+}
+
+struct FlashArgs {
+    pac: PathBuf,
+    port: Option<String>,
+    enter_download: bool,
+    format: bool,
+    chunk: usize,
+    baud: Option<u32>,
+    no_reset: bool,
+    verify: bool,
+}
+
+fn cmd_flash(a: FlashArgs) -> Result<()> {
+    let file = File::open(&a.pac).with_context(|| format!("opening {}", a.pac.display()))?;
+    let mmap = unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", a.pac.display()))?;
+    let info = pac::parse(&mmap, a.verify).context("parsing PAC")?;
+    if !info.crc_ok() {
+        bail!("PAC checksum mismatch - refusing to flash");
+    }
+    println!("Flashing {} ({} bytes)", info.product_name, info.size);
+
+    let port = resolve_download_port(a.port, a.enter_download)?;
+    println!("Download port: {port}");
+    let mut serial = Serial::open(&port, 115_200).context("opening download port")?;
+
+    let opts = FlashOptions {
+        format: a.format,
+        chunk: a.chunk,
+        baud: a.baud,
+        reset: !a.no_reset,
+        ..Default::default()
+    };
+
+    let mut state: (String, i64) = (String::new(), -1);
+    let mut progress = |stage: &str, done: u64, total: u64| {
+        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
+        if stage != state.0 {
+            if !state.0.is_empty() {
+                println!();
+            }
+            state = (stage.to_string(), -1);
+        }
+        if pct != state.1 {
+            state.1 = pct;
+            print!("\r  {stage:<14} {pct:3}%");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    };
+
+    let outcome = Flasher::new(opts)
+        .run(&mut serial, &info, &mmap, &mut progress)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!();
+    let mib = outcome.bytes_written as f64 / (1024.0 * 1024.0);
+    println!(
+        "Done: {:.2} MiB in {:.1}s ({:.0} KiB/s) — FDL1: {}",
+        mib,
+        outcome.seconds,
+        (outcome.bytes_written as f64 / 1024.0) / outcome.seconds.max(0.001),
+        outcome.version,
+    );
+
+    if a.verify && !a.no_reset {
+        print!("Waiting for the module to boot... ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let ports = discovery::wait_for_module(Duration::from_secs(60));
+        if ports.is_empty() {
+            println!("not seen in 60s (may need a USB re-enumeration)");
+        } else {
+            println!("up ({} ports)", ports.len());
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the download-mode port, optionally switching the module first.
+fn resolve_download_port(explicit: Option<String>, enter_download: bool) -> Result<String> {
+    if let Some(p) = explicit {
+        return Ok(p);
+    }
+    if let Some(p) = discovery::find_download_port() {
+        return Ok(p.name);
+    }
+    if enter_download {
+        // The AT port's product ends in " AT" (avoid matching "LUAT"/"AP Diag").
+        let mods = discovery::find_module_ports();
+        let at = mods
+            .iter()
+            .find(|p| {
+                let d = p.product.as_deref().unwrap_or("");
+                d.ends_with(" AT") || d.contains(" AT ") || d.contains("AT (")
+            })
+            .or_else(|| mods.first())
+            .context("no module AT port found to send AT*DOWNLOAD")?;
+        println!("AT*DOWNLOAD=1 -> {}", at.name);
+        recovery::enter_download_mode(&at.name).context("sending AT*DOWNLOAD")?;
+        return discovery::wait_for_download_port(Duration::from_secs(30))
+            .map(|p| p.name)
+            .context("download port did not appear after AT*DOWNLOAD");
+    }
+    bail!("no download port (0525:a4a7) found; pass --port or --enter-download")
 }
 
 fn cmd_info(path: &PathBuf, verify: bool) -> Result<()> {

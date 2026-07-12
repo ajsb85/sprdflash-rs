@@ -368,6 +368,8 @@ dependencies = [
  "memmap2",
  "serialport",
  "sprdflash-core",
+ "sprdflash-flash",
+ "sprdflash-transport",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -378,6 +380,26 @@ name = "sprdflash-core"
 version = "0.1.0"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "sprdflash-flash"
+version = "0.1.0"
+dependencies = [
+ "sprdflash-core",
+ "sprdflash-transport",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "sprdflash-transport"
+version = "0.1.0"
+dependencies = [
+ "serialport",
+ "sprdflash-core",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

@@ -42,14 +42,29 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
 | crate                | status | role                                                          |
 |----------------------|--------|---------------------------------------------------------------|
 | `sprdflash-core`     | ✅ done | sans-I/O protocol: PAC parse, PDL + BSL framing, checksums, plan |
-| `sprdflash-cli`      | ✅ `info`, `list-ports` | the `sprdflash` binary |
-| `sprdflash-transport`| ⏳ next | `serialport` transport, port discovery, beacon-window connect, recovery |
-| `sprdflash-flash`    | ⏳ next | device driver: PDL→BSL→partitions→format→reset, with `CHANGE_BAUD` |
+| `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash` | the `sprdflash` binary |
+| `sprdflash-transport`| ✅ done | `serialport` transport, port discovery, beacon-window connect, recovery |
+| `sprdflash-flash`    | ✅ done | device driver: PDL→BSL→partitions→format→reset, `CHANGE_BAUD` |
 | `sprdflash-line`     | ⏳ next | station pool, work queue, per-unit records, metrics           |
 
 The core is validated byte-for-byte against the real V4035 PAC and the reference
-Python implementation (CONNECT/CHANGE_BAUD frames, CRC-16-ARC, sprd-sum, the NV
-sum32/CRC, and the erase/marker plan all match captured vendor ground truth).
+Python implementation. The full driver is **hardware-verified on a real Air724UG
+(RDA8910)**, both a same-SDK reflash and a cross-SDK `--format` change
+(LuatOS V4035 ⇄ CSDK V302340) that boots directly on the soft reset with IMEI
+and NV intact.
+
+### Measured speed (single device, 6 MB)
+
+| tool / config                | time   | notes                                       |
+|------------------------------|--------|---------------------------------------------|
+| Python `sprdflash` (528 B)   | ~42 s  | reference                                   |
+| `sprdflash-rs` (2048 B)      | ~33 s  | **22% faster**; default                     |
+
+The device is **flash-write-bound** (~186 KiB/s): MIDST chunks above ~2 KB
+overflow the FDL2 receive buffer, and the per-frame overhead is already small at
+2 KB — so single-device time is near its floor. **Line throughput comes from
+running one station per fixture in parallel** (the `sprdflash-line` crate), not
+from squeezing a single device.
 
 ## Build & test
 

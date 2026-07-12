@@ -1,0 +1,18 @@
+[package]
+name = "sprdflash-flash"
+description = "Device flash driver for sprdflash-rs: PDL(FDL1) -> BSL(FDL2) -> partitions -> cross-SDK format -> reset, with CHANGE_BAUD and tunable chunking."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sprdflash-core.workspace = true
+sprdflash-transport = { path = "../sprdflash-transport", version = "0.1.0" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints.clippy]
+all = "warn"

@@ -1,0 +1,18 @@
+[package]
+name = "sprdflash-transport"
+description = "Serial transport, port discovery, and device recovery for sprdflash-rs (cross-platform: Windows + Linux/WSL)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sprdflash-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serialport = "4"
+
+[lints.clippy]
+all = "warn"
