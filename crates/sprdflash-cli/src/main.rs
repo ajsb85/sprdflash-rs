@@ -72,6 +72,10 @@ enum Command {
         /// such as usbipd → WSL).
         #[arg(long, default_value_t = 5.0)]
         timeout: f64,
+        /// Read each partition back and compare after writing (high-assurance;
+        /// roughly doubles the flash time).
+        #[arg(long)]
+        verify_readback: bool,
         /// Do not reset the module after flashing.
         #[arg(long)]
         no_reset: bool,
@@ -133,6 +137,7 @@ fn main() -> Result<()> {
             chunk,
             baud,
             timeout,
+            verify_readback,
             no_reset,
             no_verify,
         } => cmd_flash(FlashArgs {
@@ -143,6 +148,7 @@ fn main() -> Result<()> {
             chunk,
             baud,
             timeout,
+            verify_readback,
             no_reset,
             verify: !no_verify,
         }),
@@ -300,6 +306,7 @@ struct FlashArgs {
     chunk: usize,
     baud: Option<u32>,
     timeout: f64,
+    verify_readback: bool,
     no_reset: bool,
     verify: bool,
 }
@@ -321,6 +328,7 @@ fn cmd_flash(a: FlashArgs) -> Result<()> {
         format: a.format,
         chunk: a.chunk,
         baud: a.baud,
+        verify_readback: a.verify_readback,
         reset: !a.no_reset,
         timeout: std::time::Duration::from_secs_f64(a.timeout.max(0.1)),
         ..Default::default()

@@ -146,6 +146,37 @@ impl<'a> BslIo<'a> {
         Ok(())
     }
 
+    /// Read `total` bytes from logical `addr` via BSL READ_FLASH, in `chunk`-byte
+    /// requests (payload = addr | size | offset, all big-endian).
+    pub fn read_flash(
+        &mut self,
+        addr: u32,
+        total: usize,
+        chunk: usize,
+    ) -> Result<Vec<u8>, BslError> {
+        let mut out = Vec::with_capacity(total);
+        while out.len() < total {
+            let off = out.len();
+            let n = (total - off).min(chunk.max(1));
+            let mut p = Vec::with_capacity(12);
+            p.extend_from_slice(&addr.to_be_bytes());
+            p.extend_from_slice(&(n as u32).to_be_bytes());
+            p.extend_from_slice(&(off as u32).to_be_bytes());
+            let data = self.command(
+                bsl::cmd::READ_FLASH,
+                &p,
+                bsl::rep::READ_FLASH,
+                self.timeout,
+                "READ_FLASH",
+            )?;
+            if data.is_empty() {
+                break; // device returned nothing; let the caller's length check fail
+            }
+            out.extend_from_slice(&data);
+        }
+        Ok(out)
+    }
+
     /// Access the underlying transport (for baud changes / teardown).
     pub fn port(&mut self) -> &mut dyn Transport {
         self.port

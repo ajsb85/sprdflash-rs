@@ -26,6 +26,9 @@ const FDL_LOAD_CHUNK: usize = 2048;
 /// of a big transfer.
 const MIN_ADAPTIVE_CHUNK: usize = 512;
 
+/// Read-back request size for `--verify-readback` (conservative for usbipd).
+const READBACK_CHUNK: usize = 1024;
+
 /// A flash failure.
 #[derive(Debug, thiserror::Error)]
 pub enum FlashError {
@@ -44,6 +47,9 @@ pub enum FlashError {
     /// The device did not answer with a VER frame.
     #[error("no/invalid VER frame after FDL1")]
     Version,
+    /// A written partition read back different bytes (`--verify-readback`).
+    #[error("read-back verify failed for {0}")]
+    VerifyMismatch(String),
 }
 
 /// Result of a successful flash.
@@ -173,6 +179,15 @@ impl Flasher {
             let fid = e.file_id.as_str();
             self.send_stage_adaptive(&mut bsl, e.address, data, fid, progress)?;
             written += data.len() as u64;
+
+            if self.opts.verify_readback {
+                tracing::info!("verify {} ({} bytes)", e.file_id, data.len());
+                let back = bsl.read_flash(e.address, data.len(), READBACK_CHUNK)?;
+                if back != data {
+                    return Err(FlashError::VerifyMismatch(e.file_id.clone()));
+                }
+                progress(fid, data.len() as u64, data.len() as u64);
+            }
         }
 
         phases.push(("partitions".into(), mark.elapsed().as_secs_f64()));

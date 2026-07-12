@@ -9,7 +9,7 @@
 //! no serial port. Optional fault injection drops selected BSL acks to exercise
 //! the timeout / adaptive-retry paths.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use sprdflash_core::bsl::{self, Checksum};
@@ -34,6 +34,12 @@ pub struct MockTransport {
     out: VecDeque<u8>,
     bsl_frames: usize,
     drop_acks: Vec<usize>,
+    /// "Flash" contents by address, so READ_FLASH can serve back what was written.
+    flash: HashMap<u32, Vec<u8>>,
+    /// The in-progress write (address + accumulating MIDST bytes).
+    cur: Option<(u32, Vec<u8>)>,
+    /// If set, READ_FLASH returns this instead of what was written (fault test).
+    corrupt_readback: bool,
 }
 
 impl Default for MockTransport {
@@ -45,6 +51,9 @@ impl Default for MockTransport {
             out: VecDeque::new(),
             bsl_frames: 0,
             drop_acks: Vec::new(),
+            flash: HashMap::new(),
+            cur: None,
+            corrupt_readback: false,
         }
     }
 }
@@ -56,6 +65,16 @@ impl MockTransport {
     pub fn dropping_bsl_acks(indices: &[usize]) -> Self {
         Self {
             drop_acks: indices.to_vec(),
+            ..Self::default()
+        }
+    }
+
+    /// A mock whose READ_FLASH returns corrupted data, so a read-back verify
+    /// must fail.
+    #[must_use]
+    pub fn corrupting_readback() -> Self {
+        Self {
+            corrupt_readback: true,
             ..Self::default()
         }
     }
@@ -111,13 +130,56 @@ impl MockTransport {
                     let body = bsl::unescape(&self.in_buf[i0 + 1..i1]);
                     self.in_buf.drain(..=i1);
                     self.bsl_frames += 1;
-                    let ty = if body.len() >= 2 {
-                        u16::from_be_bytes([body[0], body[1]])
+                    let dropped = self.drop_acks.contains(&self.bsl_frames);
+                    let (ty, size) = if body.len() >= 4 {
+                        (
+                            u16::from_be_bytes([body[0], body[1]]),
+                            usize::from(u16::from_be_bytes([body[2], body[3]])),
+                        )
                     } else {
-                        0
+                        (0, 0)
                     };
-                    // NORMAL_RESET gets no reply; a dropped ack simulates a stall.
-                    if ty != bsl::cmd::NORMAL_RESET && !self.drop_acks.contains(&self.bsl_frames) {
+                    let data = body.get(4..4 + size).unwrap_or(&[]).to_vec();
+
+                    // Track writes so READ_FLASH can serve them back.
+                    match ty {
+                        bsl::cmd::START_DATA if data.len() >= 4 => {
+                            let addr = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                            self.cur = Some((addr, Vec::new()));
+                        }
+                        bsl::cmd::MIDST_DATA => {
+                            if let Some((_, buf)) = &mut self.cur {
+                                buf.extend_from_slice(&data);
+                            }
+                        }
+                        bsl::cmd::END_DATA => {
+                            if let Some((addr, buf)) = self.cur.take() {
+                                self.flash.insert(addr, buf);
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    if dropped {
+                        // no response: simulate a stall
+                    } else if ty == bsl::cmd::NORMAL_RESET {
+                        // reset gets no reply
+                    } else if ty == bsl::cmd::READ_FLASH && data.len() >= 12 {
+                        let addr = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                        let sz = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as usize;
+                        let off =
+                            u32::from_be_bytes([data[8], data[9], data[10], data[11]]) as usize;
+                        let stored = self.flash.get(&addr).map(Vec::as_slice).unwrap_or(&[]);
+                        let mut slice = stored.get(off..off + sz).unwrap_or(&[]).to_vec();
+                        if self.corrupt_readback && !slice.is_empty() {
+                            slice[0] ^= 0xFF;
+                        }
+                        self.out.extend(bsl::build_message(
+                            bsl::rep::READ_FLASH,
+                            &slice,
+                            Checksum::Sprd,
+                        ));
+                    } else {
                         self.out
                             .extend(bsl::build_message(bsl::rep::ACK, &[], Checksum::Sprd));
                     }

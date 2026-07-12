@@ -129,3 +129,38 @@ fn adaptive_retry_recovers_from_a_dropped_ack() {
         .expect("adaptive retry recovers the flash");
     assert_eq!(outcome.bytes_written, 32 + 64);
 }
+
+#[test]
+fn read_back_verify_passes_on_a_good_flash() {
+    let pac = build_pac();
+    let info = pac::parse(&pac, true).expect("valid PAC");
+    let mut mock = MockTransport::default(); // serves back exactly what was written
+    let opts = FlashOptions {
+        format: true,
+        verify_readback: true,
+        ..Default::default()
+    };
+    let mut noop = |_: &str, _: u64, _: u64| {};
+    let outcome = Flasher::new(opts)
+        .run(&mut mock, &info, &pac, &mut noop)
+        .expect("read-back matches the written bytes");
+    assert_eq!(outcome.bytes_written, 32 + 64);
+}
+
+#[test]
+fn read_back_verify_catches_corruption() {
+    use sprdflash_flash::FlashError;
+    let pac = build_pac();
+    let info = pac::parse(&pac, true).expect("valid PAC");
+    let mut mock = MockTransport::corrupting_readback(); // flips a byte on read-back
+    let opts = FlashOptions {
+        format: true,
+        verify_readback: true,
+        ..Default::default()
+    };
+    let mut noop = |_: &str, _: u64, _: u64| {};
+    let err = Flasher::new(opts)
+        .run(&mut mock, &info, &pac, &mut noop)
+        .expect_err("corrupted read-back must fail the flash");
+    assert!(matches!(err, FlashError::VerifyMismatch(_)), "got {err:?}");
+}
