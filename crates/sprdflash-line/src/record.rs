@@ -17,6 +17,15 @@ pub enum Outcome {
     Fail,
 }
 
+/// One flash phase's wall-clock duration.
+#[derive(Debug, Clone, Serialize)]
+pub struct PhaseTiming {
+    /// Phase name (`fdl1`, `fdl2`, `partitions`, `format`, `verify`).
+    pub phase: String,
+    /// Wall-clock seconds.
+    pub seconds: f64,
+}
+
 /// One unit's traceable record, emitted as a JSON line for the MES / audit log.
 #[derive(Debug, Clone, Serialize)]
 pub struct UnitRecord {
@@ -24,6 +33,10 @@ pub struct UnitRecord {
     pub ts_ms: u128,
     /// Station label (fixture).
     pub station: String,
+    /// ERP work order this unit belongs to (from `--work-order`).
+    pub work_order: Option<String>,
+    /// Operator who ran the unit (from `--operator`).
+    pub operator: Option<String>,
     /// Download port used.
     pub port: String,
     /// PAC product name.
@@ -40,6 +53,8 @@ pub struct UnitRecord {
     pub flash_seconds: f64,
     /// Total unit wall-clock seconds (flash + verify + recovery).
     pub total_seconds: f64,
+    /// Per-phase flash timings, for line balancing.
+    pub phases: Vec<PhaseTiming>,
     /// Firmware banner read back after boot (if verified).
     pub firmware: Option<String>,
     /// IMEI read back after boot (if verified).
@@ -74,6 +89,8 @@ mod tests {
         let r = UnitRecord {
             ts_ms: 1_700_000_000_000,
             station: "fixture-3".into(),
+            work_order: Some("WO-42".into()),
+            operator: Some("alice".into()),
             port: "COM34".into(),
             product: "UIX8910_MODEM".into(),
             pac: "fw.pac".into(),
@@ -82,6 +99,10 @@ mod tests {
             bytes: 6_071_296,
             flash_seconds: 33.2,
             total_seconds: 41.0,
+            phases: vec![PhaseTiming {
+                phase: "partitions".into(),
+                seconds: 30.1,
+            }],
             firmware: Some("LuatOS-Air_V4035".into()),
             imei: Some("863488050987562".into()),
             error: None,
@@ -91,5 +112,7 @@ mod tests {
         assert!(line.contains("\"result\":\"pass\""));
         assert!(line.contains("\"imei\":\"863488050987562\""));
         assert!(line.contains("\"station\":\"fixture-3\""));
+        assert!(line.contains("\"work_order\":\"WO-42\""));
+        assert!(line.contains("\"phases\":[{\"phase\":\"partitions\""));
     }
 }

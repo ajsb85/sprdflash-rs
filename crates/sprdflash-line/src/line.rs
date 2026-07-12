@@ -28,6 +28,10 @@ pub struct LineConfig {
     pub verify: bool,
     /// Extra attempts per unit after the first.
     pub retries: u32,
+    /// ERP work order stamped on every record.
+    pub work_order: Option<String>,
+    /// Operator stamped on every record.
+    pub operator: Option<String>,
     /// Append per-unit JSON-lines records here (for the MES / audit log).
     pub records_path: Option<PathBuf>,
 }
@@ -84,6 +88,8 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
                 opts: opts.clone(),
                 verify: cfg.verify,
                 retries: cfg.retries,
+                work_order: cfg.work_order.clone(),
+                operator: cfg.operator.clone(),
             };
             let records = &records;
             let sink = &sink;

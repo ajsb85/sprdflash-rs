@@ -11,7 +11,7 @@ use sprdflash_core::pac::PacInfo;
 use sprdflash_flash::{FlashOptions, Flasher};
 use sprdflash_transport::{Serial, discovery, recovery};
 
-use crate::record::{Outcome, UnitRecord};
+use crate::record::{Outcome, PhaseTiming, UnitRecord};
 use crate::verify::verify_boot;
 
 /// Configuration for one physical station/fixture.
@@ -39,6 +39,10 @@ pub struct UnitJob<'a> {
     pub verify: bool,
     /// Extra attempts after the first (with recovery between).
     pub retries: u32,
+    /// ERP work order to stamp on each record.
+    pub work_order: Option<String>,
+    /// Operator to stamp on each record.
+    pub operator: Option<String>,
 }
 
 /// Run one unit on `station`, returning its record. Never panics.
@@ -56,6 +60,8 @@ pub fn run_unit(station: &StationConfig, job: &UnitJob) -> UnitRecord {
                 return UnitRecord {
                     ts_ms,
                     station: station.label.clone(),
+                    work_order: job.work_order.clone(),
+                    operator: job.operator.clone(),
                     port,
                     product: job.info.product_name.clone(),
                     pac: job.pac_name.clone(),
@@ -64,6 +70,7 @@ pub fn run_unit(station: &StationConfig, job: &UnitJob) -> UnitRecord {
                     bytes: outcome.bytes,
                     flash_seconds: outcome.flash_seconds,
                     total_seconds: started.elapsed().as_secs_f64(),
+                    phases: outcome.phases,
                     firmware: outcome.firmware,
                     imei: outcome.imei,
                     error: None,
@@ -86,6 +93,8 @@ pub fn run_unit(station: &StationConfig, job: &UnitJob) -> UnitRecord {
     UnitRecord {
         ts_ms,
         station: station.label.clone(),
+        work_order: job.work_order.clone(),
+        operator: job.operator.clone(),
         port: station.download_port.clone().unwrap_or_default(),
         product: job.info.product_name.clone(),
         pac: job.pac_name.clone(),
@@ -94,6 +103,7 @@ pub fn run_unit(station: &StationConfig, job: &UnitJob) -> UnitRecord {
         bytes: 0,
         flash_seconds: 0.0,
         total_seconds: started.elapsed().as_secs_f64(),
+        phases: Vec::new(),
         firmware: None,
         imei: None,
         error: Some(last_err),
@@ -103,6 +113,7 @@ pub fn run_unit(station: &StationConfig, job: &UnitJob) -> UnitRecord {
 struct Success {
     bytes: u64,
     flash_seconds: f64,
+    phases: Vec<crate::record::PhaseTiming>,
     firmware: Option<String>,
     imei: Option<String>,
 }
@@ -117,7 +128,9 @@ fn try_once(station: &StationConfig, job: &UnitJob) -> Result<(Success, String),
         .map_err(|e| format!("flash: {e}"))?;
     drop(serial); // release the port so the module can re-enumerate
 
-    let (firmware, imei) = if job.verify && job.opts.reset {
+    let verify_start = Instant::now();
+    let verified = job.verify && job.opts.reset;
+    let (firmware, imei) = if verified {
         let mods = discovery::wait_for_module(Duration::from_secs(60));
         if mods.is_empty() {
             return Err("module did not boot after flash".into());
@@ -131,10 +144,23 @@ fn try_once(station: &StationConfig, job: &UnitJob) -> Result<(Success, String),
         (None, None)
     };
 
+    let mut phases: Vec<PhaseTiming> = outcome
+        .phases
+        .into_iter()
+        .map(|(phase, seconds)| PhaseTiming { phase, seconds })
+        .collect();
+    if verified {
+        phases.push(PhaseTiming {
+            phase: "verify".into(),
+            seconds: verify_start.elapsed().as_secs_f64(),
+        });
+    }
+
     Ok((
         Success {
             bytes: outcome.bytes_written,
             flash_seconds: outcome.seconds,
+            phases,
             firmware,
             imei,
         },

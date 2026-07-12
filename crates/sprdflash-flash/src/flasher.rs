@@ -55,6 +55,9 @@ pub struct FlashOutcome {
     pub bytes_written: u64,
     /// Wall-clock seconds for the whole run.
     pub seconds: f64,
+    /// Per-phase wall-clock seconds (`fdl1`, `fdl2`, `partitions`, `format`),
+    /// for line balancing and bottleneck analysis.
+    pub phases: Vec<(String, f64)>,
 }
 
 /// Drives a single device through a full flash.
@@ -78,6 +81,8 @@ impl Flasher {
         progress: Progress,
     ) -> Result<FlashOutcome, FlashError> {
         let start = Instant::now();
+        let mut phases: Vec<(String, f64)> = Vec::new();
+        let mut mark = start;
         let plan = plan::build(info).map_err(FlashError::Plan)?;
         let mut written = 0u64;
 
@@ -108,6 +113,8 @@ impl Flasher {
             version = String::from_utf8_lossy(vdata).trim().to_string();
             tracing::info!("FDL1 running: {version}");
         }
+        phases.push(("fdl1".into(), mark.elapsed().as_secs_f64()));
+        mark = Instant::now();
 
         // ---- Phase 2: BSL loads FDL2, then writes partitions ---------------
         let mut bsl = BslIo::new(port, self.opts.timeout);
@@ -149,6 +156,9 @@ impl Flasher {
             bsl.connect()?;
         }
 
+        phases.push(("fdl2".into(), mark.elapsed().as_secs_f64()));
+        mark = Instant::now();
+
         // ---- Partitions ----------------------------------------------------
         for e in &plan.partitions {
             let data = e
@@ -164,6 +174,9 @@ impl Flasher {
             self.send_stage_adaptive(&mut bsl, e.address, data, fid, progress)?;
             written += data.len() as u64;
         }
+
+        phases.push(("partitions".into(), mark.elapsed().as_secs_f64()));
+        mark = Instant::now();
 
         // ---- Cross-SDK format: erases + NV template + PREPACK --------------
         if self.opts.format {
@@ -200,6 +213,10 @@ impl Flasher {
             }
         }
 
+        if self.opts.format {
+            phases.push(("format".into(), mark.elapsed().as_secs_f64()));
+        }
+
         // ---- Reset (with the flush-and-hold teardown) ----------------------
         if self.opts.reset {
             tracing::info!("reset; module reboots into the new firmware");
@@ -211,6 +228,7 @@ impl Flasher {
             version,
             bytes_written: written,
             seconds: start.elapsed().as_secs_f64(),
+            phases,
         })
     }
 

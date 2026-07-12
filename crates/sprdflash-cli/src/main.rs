@@ -99,6 +99,12 @@ enum Command {
         /// Do not boot-verify (ATI/IMEI) each unit.
         #[arg(long)]
         no_verify: bool,
+        /// ERP work order to stamp on every record.
+        #[arg(long)]
+        work_order: Option<String>,
+        /// Operator to stamp on every record.
+        #[arg(long)]
+        operator: Option<String>,
         /// Append per-unit JSON-lines records here (MES / audit log).
         #[arg(long)]
         records: Option<PathBuf>,
@@ -144,6 +150,8 @@ fn main() -> Result<()> {
             chunk,
             retries,
             no_verify,
+            work_order,
+            operator,
             records,
         } => cmd_line(LineArgs {
             pac,
@@ -152,6 +160,8 @@ fn main() -> Result<()> {
             chunk,
             retries,
             verify: !no_verify,
+            work_order,
+            operator,
             records,
         }),
     }
@@ -164,6 +174,8 @@ struct LineArgs {
     chunk: usize,
     retries: u32,
     verify: bool,
+    work_order: Option<String>,
+    operator: Option<String>,
     records: Option<PathBuf>,
 }
 
@@ -198,6 +210,8 @@ fn cmd_line(a: LineArgs) -> Result<()> {
         chunk: a.chunk,
         verify: a.verify,
         retries: a.retries,
+        work_order: a.work_order,
+        operator: a.operator,
         records_path: a.records,
     };
     let summary = run_line(&info, &mmap, &pac_name, &cfg);
