@@ -139,6 +139,14 @@ context; `--metrics-addr` serves live Prometheus counters at `/metrics`, and
 [`tools/mes_ingest.py`](tools/mes_ingest.py) loads the JSON lines into the
 Postgres KPI schema (see [docs/](docs/)).
 
+Add `--loop` to run the line **unattended**: each station keeps flashing —
+waiting for the operator to swap in the next unit between cycles — until you
+press Ctrl-C, which stops cleanly after the in-flight units finish. Pair it with
+`--metrics-addr` so a Grafana board watches yield and throughput live all shift.
+Add `--verify-readback` for high-assurance units: after writing each partition,
+its bytes are read back with `READ_FLASH` and compared, failing on any mismatch
+(roughly doubles the flash time, so it is off by default).
+
 Each unit is one JSON line for the MES / audit log:
 
 ```json

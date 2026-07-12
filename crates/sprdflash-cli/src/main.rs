@@ -115,6 +115,9 @@ enum Command {
         /// Serve live Prometheus metrics at http://ADDR/metrics (e.g. 0.0.0.0:9184).
         #[arg(long)]
         metrics_addr: Option<String>,
+        /// Run unattended: keep each station flashing units in a loop until Ctrl-C.
+        #[arg(long = "loop")]
+        continuous: bool,
     },
 }
 
@@ -163,6 +166,7 @@ fn main() -> Result<()> {
             operator,
             records,
             metrics_addr,
+            continuous,
         } => cmd_line(LineArgs {
             pac,
             stations,
@@ -174,6 +178,7 @@ fn main() -> Result<()> {
             operator,
             records,
             metrics_addr,
+            continuous,
         }),
     }
 }
@@ -189,6 +194,7 @@ struct LineArgs {
     operator: Option<String>,
     records: Option<PathBuf>,
     metrics_addr: Option<String>,
+    continuous: bool,
 }
 
 fn cmd_line(a: LineArgs) -> Result<()> {
@@ -208,13 +214,26 @@ fn cmd_line(a: LineArgs) -> Result<()> {
 
     let stations = build_stations(&a.stations)?;
     println!(
-        "Line: {} ({}), {} station(s), {}{}",
+        "Line: {} ({}), {} station(s), {}{}{}",
         info.product_name,
         pac_name,
         stations.len(),
         if a.format { "format, " } else { "" },
         if a.verify { "boot-verify" } else { "no verify" },
+        if a.continuous { ", continuous" } else { "" },
     );
+
+    // Ctrl-C ends a continuous run cleanly after the in-flight units finish.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if a.continuous {
+        let stop = stop.clone();
+        ctrlc::set_handler(move || {
+            eprintln!("\nstopping after in-flight units…");
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
+        .context("installing Ctrl-C handler")?;
+        println!("continuous mode — press Ctrl-C to stop");
+    }
 
     let cfg = LineConfig {
         stations,
@@ -226,6 +245,8 @@ fn cmd_line(a: LineArgs) -> Result<()> {
         operator: a.operator,
         records_path: a.records,
         metrics_addr: a.metrics_addr,
+        continuous: a.continuous,
+        stop,
     };
     let summary = run_line(&info, &mmap, &pac_name, &cfg);
 

@@ -5,6 +5,7 @@
 //! bounded retries and recovery. Stations are independent and run on their own
 //! thread, so one bad unit never stalls its neighbours.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use sprdflash_core::pac::PacInfo;
@@ -203,6 +204,18 @@ fn pick_at_port(station: &StationConfig, mods: &[discovery::PortInfo]) -> String
         .or_else(|| mods.first())
         .map(|p| p.name.clone())
         .unwrap_or_default()
+}
+
+/// Block until the module is unplugged (no download or module port present), so
+/// the next insertion in a continuous run is a fresh unit. Returns early if
+/// `stop` is set.
+pub fn wait_for_removal(stop: &AtomicBool) {
+    while !stop.load(Ordering::Relaxed) {
+        if discovery::find_download_port().is_none() && discovery::find_module_ports().is_empty() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 /// Best-effort recovery between attempts.

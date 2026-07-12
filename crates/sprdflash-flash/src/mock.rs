@@ -106,7 +106,7 @@ impl MockTransport {
                     }
                 }
                 Mode::Pdl => {
-                    if self.in_buf.iter().any(|&b| b == bsl::FLAG) {
+                    if self.in_buf.contains(&bsl::FLAG) {
                         self.in_buf.clear();
                         self.out.extend(bsl::build_message(
                             bsl::rep::VER,

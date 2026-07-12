@@ -14,8 +14,12 @@ use sprdflash_core::pac::PacInfo;
 use sprdflash_flash::FlashOptions;
 
 use crate::metrics::{self, Metrics};
-use crate::record::{Outcome, UnitRecord};
+use crate::record::UnitRecord;
 use crate::station::{StationConfig, UnitJob, run_unit};
+
+/// In continuous mode, how many recent records to retain in memory for the
+/// summary (the JSONL sink keeps the full history).
+const RECENT_KEEP: usize = 500;
 
 /// Line-wide configuration.
 #[derive(Debug, Clone)]
@@ -38,6 +42,10 @@ pub struct LineConfig {
     pub records_path: Option<PathBuf>,
     /// If set, serve live Prometheus metrics at `http://<addr>/metrics`.
     pub metrics_addr: Option<String>,
+    /// Keep each station flashing units in a loop (unattended line) until `stop`.
+    pub continuous: bool,
+    /// Cooperative stop flag (e.g. set on Ctrl-C) — ends a continuous run.
+    pub stop: Arc<AtomicBool>,
 }
 
 /// Aggregate result of a line run.
@@ -106,24 +114,45 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
             let records = &records;
             let sink = &sink;
             let metrics = &metrics;
+            let stop = &cfg.stop;
+            let continuous = cfg.continuous;
             std::thread::Builder::new()
                 .name(station.label.clone())
                 .spawn_scoped(scope, move || {
                     tracing::info!(station = station.label, "start");
-                    let rec = run_unit(station, &job);
-                    tracing::info!(
-                        station = station.label,
-                        result = ?rec.result,
-                        secs = rec.total_seconds,
-                        "done"
-                    );
-                    metrics.record(&rec);
-                    if let Some(m) = sink {
-                        if let Ok(mut f) = m.lock() {
-                            let _ = writeln!(f, "{}", rec.to_json_line());
+                    loop {
+                        let rec = run_unit(station, &job);
+                        tracing::info!(
+                            station = station.label,
+                            result = ?rec.result,
+                            secs = rec.total_seconds,
+                            "done"
+                        );
+                        metrics.record(&rec);
+                        if let Some(m) = sink {
+                            if let Ok(mut f) = m.lock() {
+                                let _ = writeln!(f, "{}", rec.to_json_line());
+                            }
                         }
+                        {
+                            // Keep only a recent tail in memory for the summary;
+                            // the sink + metrics hold the full continuous history.
+                            let mut r = records.lock().expect("records mutex");
+                            r.push(rec);
+                            if continuous && r.len() > RECENT_KEEP {
+                                let drop = r.len() - RECENT_KEEP;
+                                r.drain(..drop);
+                            }
+                        }
+                        if !continuous || stop.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        // A small floor so a misconfigured/empty line (units that
+                        // fast-fail with no device present) can't busy-spin.
+                        std::thread::sleep(Duration::from_millis(500));
+                        // Wait for the operator to swap in the next unit.
+                        crate::station::wait_for_removal(stop);
                     }
-                    records.lock().expect("records mutex").push(rec);
                 })
                 .expect("spawn station thread");
         }
@@ -138,8 +167,10 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
 
     let records = records.into_inner().expect("records mutex");
     let wall_seconds = wall.elapsed().as_secs_f64();
-    let passed = records.iter().filter(|r| r.result == Outcome::Pass).count();
-    let failed = records.len() - passed;
+    // Totals come from the metrics counters, which see every unit — `records`
+    // only holds a recent tail in continuous mode.
+    let (passed64, failed64) = metrics.totals();
+    let (passed, failed) = (passed64 as usize, failed64 as usize);
     let units_per_hour = if wall_seconds > 0.0 {
         (passed as f64) * 3600.0 / wall_seconds
     } else {
@@ -147,7 +178,7 @@ pub fn run(info: &PacInfo, pac: &[u8], pac_name: &str, cfg: &LineConfig) -> Line
     };
 
     LineSummary {
-        total: records.len(),
+        total: passed + failed,
         passed,
         failed,
         wall_seconds,

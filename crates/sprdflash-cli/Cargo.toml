@@ -23,6 +23,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serialport = "4"
 memmap2 = "0.9"
+ctrlc = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints.clippy]

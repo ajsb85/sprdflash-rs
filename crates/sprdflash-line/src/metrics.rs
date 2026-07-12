@@ -55,6 +55,15 @@ impl Metrics {
             .fetch_add((rec.flash_seconds * 1000.0) as u64, Ordering::Relaxed);
     }
 
+    /// Current `(passed, failed)` unit counts.
+    #[must_use]
+    pub fn totals(&self) -> (u64, u64) {
+        (
+            self.passed.load(Ordering::Relaxed),
+            self.failed.load(Ordering::Relaxed),
+        )
+    }
+
     /// Render the current counters in Prometheus text format.
     #[must_use]
     pub fn render(&self) -> String {
@@ -163,6 +172,7 @@ mod tests {
         assert!(text.contains("sprdflash_units_total{result=\"fail\"} 1"));
         assert!(text.contains("sprdflash_retries_total 1"));
         assert!(text.contains("sprdflash_bytes_total 3000"));
+        assert_eq!(m.totals(), (2, 1), "two pass, one fail");
     }
 
     #[test]
