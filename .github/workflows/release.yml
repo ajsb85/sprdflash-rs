@@ -73,6 +73,8 @@ jobs:
           rm -f "$key"
 
       - name: Attest build provenance
+        # Keyless provenance is only available on public repositories.
+        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: ${{ steps.pkg.outputs.name }}
