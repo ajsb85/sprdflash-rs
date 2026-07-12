@@ -14,9 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 sprdflash-core.workspace = true
-sprdflash-transport = { path = "../sprdflash-transport", version = "0.3.0" }
-sprdflash-flash = { path = "../sprdflash-flash", version = "0.3.0" }
-sprdflash-line = { path = "../sprdflash-line", version = "0.3.0" }
+sprdflash-transport = { path = "../sprdflash-transport", version = "0.4.0" }
+sprdflash-flash = { path = "../sprdflash-flash", version = "0.4.0" }
+sprdflash-line = { path = "../sprdflash-line", version = "0.4.0" }
 thiserror.workspace = true
 tracing.workspace = true
 anyhow = "1"
