@@ -1,0 +1,22 @@
+[package]
+name = "sprdflash-line"
+description = "Manufacturing-line orchestrator for sprdflash-rs: parallel stations, per-unit records, boot verification, and throughput metrics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+sprdflash-core.workspace = true
+sprdflash-transport.workspace = true
+sprdflash-flash.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serialport = "4"
+
+[lints.clippy]
+all = "warn"

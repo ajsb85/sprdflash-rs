@@ -45,7 +45,7 @@ The wire, not the CPU, is the bottleneck. The levers, biggest first:
 | `sprdflash-cli`      | ✅ `info`, `list-ports`, `flash` | the `sprdflash` binary |
 | `sprdflash-transport`| ✅ done | `serialport` transport, port discovery, beacon-window connect, recovery |
 | `sprdflash-flash`    | ✅ done | device driver: PDL→BSL→partitions→format→reset, `CHANGE_BAUD` |
-| `sprdflash-line`     | ⏳ next | station pool, work queue, per-unit records, metrics           |
+| `sprdflash-line`     | ✅ done | parallel stations, boot-verify (ATI/IMEI), JSON-lines records, metrics |
 
 The core is validated byte-for-byte against the real V4035 PAC and the reference
 Python implementation. The full driver is **hardware-verified on a real Air724UG
@@ -69,13 +69,48 @@ from squeezing a single device.
 ## Build & test
 
 ```
-cargo test            # 20 core tests, all against captured ground truth
+cargo test            # 21 tests, all against captured ground truth
 cargo build --release
-sprdflash info  path/to/firmware.pac
+
+# one device, auto mode-switch, boots into the new firmware
+sprdflash flash --enter-download firmware.pac
+# cross-SDK change: format FS + refresh NV (keeps IMEI)
+sprdflash flash --enter-download --format firmware.pac
+sprdflash info firmware.pac
 sprdflash list-ports
 ```
 
 Targets: `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu` (WSL Ubuntu).
+
+## Running the line
+
+Each `--station` runs on its own thread; they flash and boot-verify in parallel,
+stream a JSON-lines record per unit, and report yield + throughput. Stations are
+independent, so one bad unit never stalls the line. A wedged download agent is
+recovered automatically (`pnputil` re-enumerate on Windows; wire a fixture
+power-cycle on Linux) with bounded retries.
+
+```
+> sprdflash line firmware.pac \
+    --station fixture-1:COM12 --station fixture-2:COM22 --station fixture-3:COM32 \
+    --format --records /var/log/flash/units.jsonl
+
+── results ──
+  [PASS] fixture-1     41.0s  LuatOS-Air_V4035_...  IMEI 8634880509...
+  [PASS] fixture-2     41.3s  LuatOS-Air_V4035_...  IMEI 8634880511...
+  [PASS] fixture-3     40.8s  LuatOS-Air_V4035_...  IMEI 8634880514...
+
+3/3 passed in 41.3s  →  ~261 good units/hour at this concurrency
+```
+
+Each unit is one JSON line for the MES / audit log:
+
+```json
+{"ts_ms":1700000000000,"station":"fixture-1","port":"COM12","product":"UIX8910_MODEM","result":"pass","attempts":1,"bytes":6071296,"flash_seconds":33.2,"total_seconds":41.0,"firmware":"LuatOS-Air_V4035_...","imei":"863488050987562","error":null}
+```
+
+A device is flash-write-bound at ~33 s, so throughput scales with fixtures
+(~110/hour each) → **thousands/day across a modest bank of stations**.
 
 ## Protocol reference
 

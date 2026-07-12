@@ -12,8 +12,12 @@ authors = ["ajsb85"]
 
 [workspace.dependencies]
 sprdflash-core = { path = "crates/sprdflash-core", version = "0.1.0" }
+sprdflash-transport = { path = "crates/sprdflash-transport", version = "0.1.0" }
+sprdflash-flash = { path = "crates/sprdflash-flash", version = "0.1.0" }
 thiserror = "2"
 tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Release profile tuned for a manufacturing binary: fast, small, and with
 # overflow checks kept ON (correctness on the line beats a few cycles).

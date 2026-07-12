@@ -70,6 +70,30 @@ enum Command {
         #[arg(long)]
         no_verify: bool,
     },
+    /// Run a manufacturing line: flash + boot-verify across stations in parallel.
+    Line {
+        /// Path to the .pac file.
+        pac: PathBuf,
+        /// A station, repeatable: `label[:at_port[:download_port]]`. If omitted,
+        /// one auto-discovered station is used.
+        #[arg(long = "station")]
+        stations: Vec<String>,
+        /// Cross-SDK format (erase + NV + prepack).
+        #[arg(long)]
+        format: bool,
+        /// MIDST chunk size for partition writes.
+        #[arg(long, default_value_t = 2048)]
+        chunk: usize,
+        /// Extra attempts per unit after the first.
+        #[arg(long, default_value_t = 1)]
+        retries: u32,
+        /// Do not boot-verify (ATI/IMEI) each unit.
+        #[arg(long)]
+        no_verify: bool,
+        /// Append per-unit JSON-lines records here (MES / audit log).
+        #[arg(long)]
+        records: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -102,7 +126,138 @@ fn main() -> Result<()> {
             no_reset,
             verify: !no_verify,
         }),
+        Command::Line {
+            pac,
+            stations,
+            format,
+            chunk,
+            retries,
+            no_verify,
+            records,
+        } => cmd_line(LineArgs {
+            pac,
+            stations,
+            format,
+            chunk,
+            retries,
+            verify: !no_verify,
+            records,
+        }),
     }
+}
+
+struct LineArgs {
+    pac: PathBuf,
+    stations: Vec<String>,
+    format: bool,
+    chunk: usize,
+    retries: u32,
+    verify: bool,
+    records: Option<PathBuf>,
+}
+
+fn cmd_line(a: LineArgs) -> Result<()> {
+    use sprdflash_line::{run as run_line, LineConfig};
+
+    let file = File::open(&a.pac).with_context(|| format!("opening {}", a.pac.display()))?;
+    let mmap = unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", a.pac.display()))?;
+    let info = pac::parse(&mmap, true).context("parsing PAC")?;
+    if !info.crc_ok() {
+        bail!("PAC checksum mismatch - refusing to flash");
+    }
+    let pac_name = a
+        .pac
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let stations = build_stations(&a.stations)?;
+    println!(
+        "Line: {} ({}), {} station(s), {}{}",
+        info.product_name,
+        pac_name,
+        stations.len(),
+        if a.format { "format, " } else { "" },
+        if a.verify { "boot-verify" } else { "no verify" },
+    );
+
+    let cfg = LineConfig {
+        stations,
+        format: a.format,
+        chunk: a.chunk,
+        verify: a.verify,
+        retries: a.retries,
+        records_path: a.records,
+    };
+    let summary = run_line(&info, &mmap, &pac_name, &cfg);
+
+    println!("\n── results ──");
+    for r in &summary.records {
+        let tag = match r.result {
+            sprdflash_line::Outcome::Pass => "PASS",
+            sprdflash_line::Outcome::Fail => "FAIL",
+        };
+        println!(
+            "  [{tag}] {:<12} {:>5.1}s  {}{}",
+            r.station,
+            r.total_seconds,
+            r.firmware.as_deref().unwrap_or("-"),
+            r.imei
+                .as_deref()
+                .map(|i| format!("  IMEI {i}"))
+                .unwrap_or_default(),
+        );
+        if let Some(e) = &r.error {
+            println!("             error: {e}");
+        }
+    }
+    println!(
+        "\n{}/{} passed in {:.1}s  →  ~{:.0} good units/hour at this concurrency",
+        summary.passed, summary.total, summary.wall_seconds, summary.units_per_hour
+    );
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Build station configs from `label[:at_port[:download_port]]` specs, or one
+/// auto-discovered station if none were given.
+fn build_stations(specs: &[String]) -> Result<Vec<sprdflash_line::StationConfig>> {
+    use sprdflash_line::StationConfig;
+    if specs.is_empty() {
+        // Auto: one station from whatever module/download port is present.
+        let at = discovery::find_module_ports()
+            .into_iter()
+            .find(|p| {
+                let d = p.product.as_deref().unwrap_or("");
+                d.ends_with(" AT") || d.contains(" AT ") || d.contains("AT (")
+            })
+            .map(|p| p.name);
+        let dl = discovery::find_download_port().map(|p| p.name);
+        if at.is_none() && dl.is_none() {
+            bail!("no module or download port found; connect a device or pass --station");
+        }
+        return Ok(vec![StationConfig {
+            label: "station-1".into(),
+            at_port: at,
+            download_port: dl,
+        }]);
+    }
+    Ok(specs
+        .iter()
+        .map(|s| {
+            let mut parts = s.splitn(3, ':');
+            let label = parts.next().unwrap_or("station").to_string();
+            let at_port = parts.next().filter(|s| !s.is_empty()).map(String::from);
+            let download_port = parts.next().filter(|s| !s.is_empty()).map(String::from);
+            StationConfig {
+                label,
+                at_port,
+                download_port,
+            }
+        })
+        .collect())
 }
 
 struct FlashArgs {
