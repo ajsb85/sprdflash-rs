@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use memmap2::Mmap;
+use sprdflash_core::checksum::crc16_arc;
 use sprdflash_core::pac;
 use sprdflash_core::plan::{self, Role};
 use sprdflash_flash::{FlashOptions, Flasher};
@@ -62,6 +63,24 @@ enum Command {
         #[arg(long)]
         pac: PathBuf,
         /// Output directory; one <file_id>.bin per partition is written here.
+        #[arg(long)]
+        out: PathBuf,
+        /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
+        #[arg(long)]
+        port: Option<String>,
+        /// Send AT*DOWNLOAD=1 on the module's AT port first (auto mode-switch).
+        #[arg(long)]
+        enter_download: bool,
+    },
+    /// Clone a device into a flashable golden .pac: read its partitions off the
+    /// flash and splice them into a copy of the reference PAC (same FDL stages,
+    /// layout, and markers), refreshing the CRCs. Captures a configured
+    /// reference unit's firmware so it can be flashed to others.
+    Clone {
+        /// Reference PAC (FDL stages + partition layout to capture).
+        #[arg(long)]
+        pac: PathBuf,
+        /// Output path for the golden .pac.
         #[arg(long)]
         out: PathBuf,
         /// Download-mode COM port; auto-detected (0525:a4a7) if omitted.
@@ -163,6 +182,12 @@ fn main() -> Result<()> {
             port,
             enter_download,
         } => cmd_dump(&pac, &out, port, enter_download),
+        Command::Clone {
+            pac,
+            out,
+            port,
+            enter_download,
+        } => cmd_clone(&pac, &out, port, enter_download),
         Command::Flash {
             pac,
             port,
@@ -510,6 +535,94 @@ fn resolve_download_port(explicit: Option<String>, enter_download: bool) -> Resu
             .context("download port did not appear after AT*DOWNLOAD");
     }
     bail!("no download port (0525:a4a7) found; pass --port or --enter-download")
+}
+
+/// Read a device's partitions and repackage them into a flashable golden PAC by
+/// splicing them into a copy of the reference PAC and refreshing the CRCs.
+fn cmd_clone(
+    pac_path: &PathBuf,
+    out_path: &PathBuf,
+    port: Option<String>,
+    enter_download: bool,
+) -> Result<()> {
+    let file = File::open(pac_path).with_context(|| format!("opening {}", pac_path.display()))?;
+    let mmap =
+        unsafe { Mmap::map(&file) }.with_context(|| format!("mmap {}", pac_path.display()))?;
+    let info = pac::parse(&mmap, false).context("parsing reference PAC")?;
+    let flashplan = plan::build(&info).map_err(|e| anyhow::anyhow!("building plan: {e}"))?;
+    // (file_id, flash address, payload offset in the PAC, size)
+    let parts: Vec<(String, u32, u32, u32)> = flashplan
+        .partitions
+        .iter()
+        .map(|e| (e.file_id.clone(), e.address, e.offset, e.size))
+        .collect();
+    if parts.is_empty() {
+        bail!("no partitions in {}", pac_path.display());
+    }
+
+    let dl = resolve_download_port(port, enter_download)?;
+    println!("Download port: {dl}");
+    let mut serial = Serial::open(&dl, 115_200).context("opening download port")?;
+    let regions: Vec<(u32, u32)> = parts.iter().map(|(_, a, _, s)| (*a, *s)).collect();
+
+    let mut state: (String, i64) = (String::new(), -1);
+    let mut progress = |stage: &str, done: u64, total: u64| {
+        let pct = done.saturating_mul(100).checked_div(total).unwrap_or(100) as i64;
+        if stage != state.0 {
+            if !state.0.is_empty() {
+                println!();
+            }
+            state = (stage.to_string(), -1);
+        }
+        if pct != state.1 {
+            state.1 = pct;
+            print!("\r  {stage:<14} {pct:3}%");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    };
+    let dumps = Flasher::new(FlashOptions::default())
+        .dump(&mut serial, &info, &mmap, &regions, &mut progress)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!();
+
+    // Splice the dumped partitions into a copy of the reference PAC.
+    let mut out = mmap.to_vec();
+    for ((fid, _, offset, size), data) in parts.iter().zip(&dumps) {
+        if data.len() != *size as usize {
+            bail!(
+                "{fid}: short read ({} of {} bytes) — cannot clone",
+                data.len(),
+                size
+            );
+        }
+        let o = *offset as usize;
+        out[o..o + data.len()].copy_from_slice(data);
+        println!("  {fid:<12} {} bytes captured", data.len());
+    }
+
+    // Refresh the CRC-16-ARC fields (stored little-endian): payload over the body
+    // past the header, then the header itself. Neither covers the CRC bytes.
+    const OFF_CRC1: usize = 2120; // header crc
+    const OFF_CRC2: usize = 2122; // payload crc
+    let crc2 = crc16_arc(&out[pac::HEADER_SIZE..]);
+    out[OFF_CRC2..OFF_CRC2 + 2].copy_from_slice(&crc2.to_le_bytes());
+    let crc1 = crc16_arc(&out[..OFF_CRC1]);
+    out[OFF_CRC1..OFF_CRC1 + 2].copy_from_slice(&crc1.to_le_bytes());
+
+    // Validate before writing — the golden PAC must pass its own CRCs.
+    let check = pac::parse(&out, true).context("re-parsing the golden PAC")?;
+    if !check.crc_ok() {
+        bail!("reconstructed PAC failed its own CRC — refusing to write");
+    }
+    std::fs::write(out_path, &out).with_context(|| format!("writing {}", out_path.display()))?;
+    println!(
+        "Wrote golden PAC {} ({} bytes) — {} partition(s) captured from the device",
+        out_path.display(),
+        out.len(),
+        dumps.len()
+    );
+    Ok(())
 }
 
 /// Read the device's partitions back off flash into `<out>/<file_id>.bin`.

@@ -148,6 +148,39 @@ fn read_back_verify_passes_on_a_good_flash() {
 }
 
 #[test]
+fn repacking_a_partition_keeps_the_pac_valid() {
+    // Models `clone`: overwrite a partition's payload in a copy of the PAC and
+    // refresh the CRC-16-ARC fields, then confirm it re-parses and passes CRCs.
+    let mut pac = build_pac();
+    let info = pac::parse(&pac, true).expect("valid PAC");
+    let ap = info
+        .entries
+        .iter()
+        .find(|e| e.file_id == "AP")
+        .expect("AP entry");
+    let (off, size) = (ap.offset as usize, ap.size as usize);
+    for b in &mut pac[off..off + size] {
+        *b = 0xAB;
+    }
+    // Refresh CRCs exactly as `clone` does: payload over [HEADER_SIZE..] @2122,
+    // header over [..2120] @2120, both little-endian.
+    let crc2 = crc16_arc(&pac[HEADER_SIZE..]);
+    pac[2122..2124].copy_from_slice(&crc2.to_le_bytes());
+    let crc1 = crc16_arc(&pac[..2120]);
+    pac[2120..2122].copy_from_slice(&crc1.to_le_bytes());
+
+    let info2 = pac::parse(&pac, true).expect("repacked PAC parses");
+    assert!(info2.crc_ok(), "repacked PAC must pass its own CRCs");
+    let ap2 = info2.entries.iter().find(|e| e.file_id == "AP").unwrap();
+    assert!(
+        pac[ap2.offset as usize..][..ap2.size as usize]
+            .iter()
+            .all(|&b| b == 0xAB),
+        "repacked AP payload carries the new bytes"
+    );
+}
+
+#[test]
 fn dump_reads_partitions_off_the_device() {
     let pac = build_pac();
     let info = pac::parse(&pac, true).expect("valid PAC");
