@@ -78,8 +78,44 @@ pub fn sum32(data: &[u8]) -> u32 {
         .fold(0u32, |acc, &b| acc.wrapping_add(u32::from(b)))
 }
 
+/// CRC-32 (IEEE 802.3, reflected poly 0xEDB88320, init/xorout 0xFFFFFFFF).
+///
+/// Used to validate U-Boot legacy image (`uImage`) headers and payloads embedded
+/// in a NOR dump. Standard check value: `crc32(b"123456789") == 0xCBF43926`.
+#[must_use]
+pub fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc = (crc >> 8) ^ CRC32_TABLE[usize::from((crc ^ u32::from(b)) as u8)];
+    }
+    !crc
+}
+
 /// Precomputed CRC-16-ARC table (poly 0xA001), built once at load.
 const CRC16_ARC_TABLE: [u16; 256] = build_arc_table();
+
+/// Precomputed CRC-32 table (reflected poly 0xEDB88320), built once at load.
+const CRC32_TABLE: [u32; 256] = build_crc32_table();
+
+const fn build_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut i = 0usize;
+    while i < 256 {
+        let mut crc = i as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+            bit += 1;
+        }
+        table[i] = crc;
+        i += 1;
+    }
+    table
+}
 
 const fn build_arc_table() -> [u16; 256] {
     let mut table = [0u16; 256];
@@ -109,6 +145,12 @@ mod tests {
     fn crc16_arc_standard_check_value() {
         assert_eq!(crc16_arc(b"123456789"), 0xBB3D);
         assert_eq!(crc16_arc(b""), 0x0000);
+    }
+
+    #[test]
+    fn crc32_standard_check_value() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(crc32(b""), 0x0000_0000);
     }
 
     #[test]

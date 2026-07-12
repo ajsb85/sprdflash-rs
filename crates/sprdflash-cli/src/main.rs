@@ -113,6 +113,17 @@ enum Command {
         #[arg(long)]
         enter_download: bool,
     },
+    /// Reconstruct a proposed partition layout (a <BMAConfig>) from a full flash
+    /// dump (e.g. from `dump --full`), by classifying on-flash image content.
+    /// Offline — no device needed. Names are generic content-type defaults.
+    Layout {
+        /// Path to a full flash image (raw NOR dump, e.g. flash.bin).
+        #[arg(long)]
+        flash: PathBuf,
+        /// Write the proposed <BMAConfig> XML here (else printed to stdout).
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Flash a .pac to the module natively (PDL + BSL, no vendor tool).
     Flash {
         /// Path to the .pac file.
@@ -218,6 +229,7 @@ fn main() -> Result<()> {
             port,
             enter_download,
         } => cmd_parts(&pac, port, enter_download),
+        Command::Layout { flash, out } => cmd_layout(&flash, out.as_ref()),
         Command::Flash {
             pac,
             port,
@@ -652,6 +664,55 @@ fn cmd_clone(
         out.len(),
         dumps.len()
     );
+    Ok(())
+}
+
+/// Reconstruct a proposed partition layout from a full flash image (offline).
+fn cmd_layout(flash_path: &PathBuf, out: Option<&PathBuf>) -> Result<()> {
+    use sprdflash_core::reconstruct::{self, NOR_BASE};
+
+    let image =
+        std::fs::read(flash_path).with_context(|| format!("reading {}", flash_path.display()))?;
+    let regions = reconstruct::reconstruct(&image, NOR_BASE);
+    if regions.is_empty() {
+        bail!(
+            "no recognizable partition content in {}",
+            flash_path.display()
+        );
+    }
+
+    println!(
+        "Reconstructed {} region(s) from {} ({} bytes). Names are generic\n\
+         content-type defaults — the flash stores no partition role names.\n",
+        regions.len(),
+        flash_path.display(),
+        image.len()
+    );
+    println!(
+        "{:<12} {:<11} {:<12} {:>10} {:>10}  {:<9} detail",
+        "id", "type", "base", "reserved", "used", "confidence"
+    );
+    for r in &regions {
+        println!(
+            "{:<12} {:<11} {:#012x} {:>10} {:>10}  {:<9} {}",
+            r.id,
+            r.kind,
+            r.phys_addr,
+            format!("{:#x}", r.reserved_size),
+            format!("{:#x}", r.used_size),
+            r.confidence.tag(),
+            r.detail,
+        );
+    }
+
+    let xml = reconstruct::to_bmaconfig_xml(&regions);
+    match out {
+        Some(p) => {
+            std::fs::write(p, &xml).with_context(|| format!("writing {}", p.display()))?;
+            println!("\nProposed BMAConfig -> {}", p.display());
+        }
+        None => println!("\n{xml}"),
+    }
     Ok(())
 }
 

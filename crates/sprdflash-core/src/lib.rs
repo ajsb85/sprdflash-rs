@@ -22,6 +22,7 @@ pub mod error;
 pub mod pac;
 pub mod pdl;
 pub mod plan;
+pub mod reconstruct;
 
 pub use error::{Error, Result};
 
