@@ -1,0 +1,57 @@
+# Prometheus alerting rules for the sprdflash line exporter (--metrics-addr).
+#
+# Assumes a scrape job named "sprdflash" (see docs/grafana/README.md). Load via
+# `rule_files:` in prometheus.yml and reload. Tune the thresholds/`for` windows
+# to your line's cadence before enabling paging.
+groups:
+  - name: sprdflash-line
+    rules:
+      # The exporter is unreachable — the line host or the `line` process is down.
+      - alert: SprdflashExporterDown
+        expr: up{job="sprdflash"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "sprdflash exporter down ({{ $labels.instance }})"
+          description: "Prometheus cannot scrape the flash line for 2m; the host or `sprdflash line` process is likely down."
+
+      # First-pass yield has dropped — a process/fixture/firmware problem. Guarded
+      # on recent volume so an idle line does not alert.
+      - alert: SprdflashLowFirstPassYield
+        expr: |
+          (
+            100 * sum(rate(sprdflash_units_total{result="pass"}[15m]))
+            / clamp_min(sum(rate(sprdflash_units_total[15m])), 0.0001)
+          ) < 95
+          and sum(rate(sprdflash_units_total[15m])) > 0
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "First-pass yield below 95% ({{ $value | printf \"%.1f\" }}%)"
+          description: "Sustained FPY under 95% over 15m — investigate the top failure mode (v_event_defects / the record `error` field)."
+
+      # The line is producing only scrap: failures are happening but nothing passes.
+      - alert: SprdflashAllFailing
+        expr: |
+          sum(rate(sprdflash_units_total{result="fail"}[10m])) > 0
+          and sum(rate(sprdflash_units_total{result="pass"}[10m])) == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Line failing every unit"
+          description: "Units are being attempted and all are failing for 10m — stop the line and check the fixtures / PAC / power."
+
+      # Retries are climbing — flaky USB/fixtures, still passing but at reduced
+      # throughput and reliability.
+      - alert: SprdflashRetrySpike
+        expr: |
+          (
+            sum(rate(sprdflash_retries_total[10m]))
+            / clamp_min(sum(rate(sprdflash_units_total[10m])), 0.0001)
+          ) > 0.5
+          and sum(rate(sprdflash_units_total[10m])) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "High retry rate ({{ $value | printf \"%.2f\" }} retries/unit)"
+          description: "More than 0.5 retries per unit over 10m — check cabling, hubs, and fixture power-cycling."
