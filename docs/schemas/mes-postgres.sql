@@ -76,7 +76,8 @@ CREATE INDEX ix_flash_record_imei     ON flash_record (imei);
 CREATE INDEX ix_flash_record_result   ON flash_record (result);
 CREATE INDEX ix_flash_record_wo       ON flash_record (work_order_id);
 
--- Optional per-phase breakdown (roadmap; one row per phase per record)
+-- Per-phase breakdown (one row per phase per record); the tool emits phases[]
+-- in every record, so this normalizes what the flash_event landing zone lands.
 CREATE TABLE phase_timing (
     record_id uuid NOT NULL REFERENCES flash_record(record_id) ON DELETE CASCADE,
     phase     text NOT NULL,   -- fdl1 | fdl2 | partitions | format | verify

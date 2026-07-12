@@ -66,7 +66,9 @@ Add your public key to your GitHub account (Settings → SSH and GPG keys →
 - **`cargo clippy --all-targets -D warnings`** must pass — no `#[allow(...)]`
   without a comment justifying it.
 - **`cargo test --all`** must pass. Protocol changes need a test against captured
-  ground-truth bytes (see `sprdflash-core/src/*.rs` `#[cfg(test)]` modules).
+  ground-truth bytes (see `sprdflash-core/src/*.rs` `#[cfg(test)]` modules);
+  driver and line-flow changes can be covered hardware-free with `MockTransport`
+  (see `sprdflash-flash/tests/end_to_end.rs` and `sprdflash-line/tests/`).
 - `sprdflash-core` is **`#![forbid(unsafe_code)]`** — keep all `unsafe` (mmap,
   FFI) in the outer crates and document each block.
 - Every source file carries the SPDX header:
@@ -87,17 +89,38 @@ cargo build --release
 
 ## Hardware changes
 
-Protocol/driver changes must be verified on a real RDA8910/UIS8910 module (a
-same-SDK reflash **and** a cross-SDK `--format` change that boots with IMEI
-intact). Note the device, firmware, and measured timing in the PR/commit body.
+Cover as much as possible hardware-free first: `MockTransport`
+(`sprdflash-flash/src/mock.rs`) simulates the PDL + BSL device, so control flow,
+adaptive retries, and read-back logic are all exercised in CI. Changes that touch
+the **wire** — framing, command bytes, timing, `CHANGE_BAUD` — must still be
+verified on a real RDA8910/UIS8910 module: a same-SDK reflash **and** a cross-SDK
+`--format` change that boots with IMEI intact. Note the device, firmware, and
+measured timing in the PR/commit body.
 
 ## Releasing
 
 Maintainers cut releases from `main`:
 
-```
-tbdflow commit -t chore -s release --message "release v0.2.0" --tag v0.2.0
-```
+1. **Bump versions.** Update the workspace `version` and every inter-crate
+   `version = "…"` in the `Cargo.toml` files, then `cargo build` to refresh
+   `Cargo.lock`.
+2. **Commit:** `tbdflow commit -t chore -s release --message "X.Y.Z"`.
+3. **Tag** (SSH-signed, with release notes in a file):
 
-The tag is SSH-signed; a signed GitHub release is published with a changelog
-generated from Conventional Commits (`tbdflow changelog`).
+   ```
+   git tag -s vX.Y.Z -F notes.txt && git push origin vX.Y.Z
+   ```
+
+4. The **`release` workflow** builds, attests (keyless Sigstore provenance), and
+   attaches binaries for all four targets — Windows, Linux, and macOS
+   (Intel + Apple Silicon).
+5. **Sign the artifacts.** CI signs only when the `SSH_SIGNING_KEY` secret is
+   set; otherwise sign locally with the same key and upload the `.sig` files:
+
+   ```
+   gh release download vX.Y.Z
+   for f in sprdflash-vX.Y.Z-*; do ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n file "$f"; done
+   gh release upload vX.Y.Z sprdflash-vX.Y.Z-*.sig
+   ```
+
+6. **Write the description:** `gh release edit vX.Y.Z --notes-file notes.md`.

@@ -81,8 +81,15 @@ All computed from `flash_record` (see
   (by result), `sprdflash_retries_total`, `sprdflash_bytes_total`, and
   `sprdflash_flash_seconds_total` at `/metrics`, for Grafana alongside the batch
   KPIs.
+- ✅ **Continuous line mode** (`--loop`): stations flash units in a loop until
+  Ctrl-C, so the exporter is live indefinitely and the line runs unattended;
+  records stream to the JSONL sink the whole shift.
+- ✅ **Post-write read-back verify** (`--verify-readback`): each partition is read
+  back off the device and compared byte-for-byte, so a marginal write is caught
+  as a `read-back verify failed for …` defect on the line, not in the field.
 
 ## Roadmap
 
-- **Continuous line mode**: keep stations flashing units in a loop (so the
-  exporter is live indefinitely and the line runs unattended).
+- **Per-fixture presence tracking** for continuous mode: key device-removal
+  detection on each station's USB location so multi-fixture `--loop` lines can
+  tell which fixture's unit was swapped.

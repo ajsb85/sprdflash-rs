@@ -111,9 +111,10 @@ The atomic event — one row per `sprdflash` unit attempt, mapped 1:1 from the
 emitted JSON line (§5). This is what the tool produces.
 
 ### PHASE_TIMING
-Optional per-phase breakdown (FDL load, partitions, format, verify) for line
-balancing and bottleneck analysis. Emitted when the tool runs with phase
-timing enabled (roadmap; today `flash_seconds`/`total_seconds` are recorded).
+Per-phase breakdown (`fdl1`, `fdl2`, `partitions`, `format`, `verify`) for line
+balancing and bottleneck analysis. Every record carries it in the `phases[]`
+array, alongside the overall `flash_seconds`/`total_seconds`; the
+`v_event_phase_avg` view rolls it up per phase.
 
 ## 4. KPIs (derived by the MES/ERP)
 

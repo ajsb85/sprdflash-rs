@@ -47,3 +47,8 @@ psql "$DATABASE_URL" -c 'SELECT * FROM v_event_fpy'            # KPIs, immediate
 `v_event_fpy`, `v_event_throughput`, `v_event_phase_avg`, and `v_event_defects`
 give first-pass yield, throughput, per-phase line-balancing, and the defect
 Pareto with zero ETL. The normalized star schema above is the warehouse it feeds.
+
+Running the line unattended with `sprdflash line … --loop` appends to the same
+JSONL all shift. Because the ingester is idempotent (keyed on `station, ts_ms`),
+you can re-run it on the growing file on a timer — or tail it with any log
+shipper — to load new units incrementally without double-counting.
