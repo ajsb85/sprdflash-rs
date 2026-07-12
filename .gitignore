@@ -3,3 +3,5 @@
 *.pdb
 Cargo.lock.orig
 # keep Cargo.lock committed: this is a manufacturing binary, builds must be reproducible
+# local, uncommitted working notes
+/HANDOFF.md
